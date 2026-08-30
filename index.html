@@ -781,11 +781,14 @@ const COLLECTIONS = {
       {k:"name",l:"이름",t:"person",req:1},
       {k:"dept",l:"부서",t:"text"},
       {k:"position",l:"직급",t:"text"},
-      {k:"type",l:"고용형태",t:"select",o:["정규직","계약직","인턴","프리랜서"],badge:1},
+      {k:"type",l:"고용형태",t:"select",o:["정규직","계약직","인턴","프리랜서","외주","파견","파트","기타"],badge:1},
       {k:"joinDate",l:"입사일",t:"date"},
       {k:"email",l:"이메일",t:"text"},
       {k:"phone",l:"연락처",t:"text"},
       {k:"status",l:"상태",t:"select",o:["재직","휴직","수습","퇴사"],badge:1,req:1},
+      {k:"annualRemain",l:"잔여연차",t:"num",hint:"다우오피스 연차 현황 조회로 채워집니다"},
+      {k:"annualUsed",l:"사용연차",t:"num",hide:1},
+      {k:"annualTotal",l:"총연차",t:"num",hide:1},
       {k:"note",l:"비고",t:"textarea",hide:1}
     ]
   },
@@ -827,8 +830,10 @@ const COLLECTIONS = {
       {k:"startDate",l:"시작일",t:"date",req:1},
       {k:"endDate",l:"종료일",t:"date"},
       {k:"days",l:"일수",t:"num",calc:r=>r.kind==="반차"?0.5:dspan(r.startDate,r.endDate),hint:"시작일~종료일 (반차 0.5)"},
-      {k:"clockIn",l:"출근",t:"text",hint:"다우오피스 근태 조회로 채워집니다"},
-      {k:"clockOut",l:"퇴근",t:"text",hint:"다우오피스 근태 조회로 채워집니다"},
+      {k:"clockIn",l:"출근",t:"text",hint:"다우오피스 근태 이력 조회로 채워집니다"},
+      {k:"clockOut",l:"퇴근",t:"text",hint:"다우오피스 근태 이력 조회로 채워집니다"},
+      {k:"workHours",l:"근무시간",t:"num",hint:"휴게 제외 총 근무시간"},
+      {k:"overHours",l:"연장",t:"num",hide:1},
       {k:"remain",l:"잔여연차",t:"num"},
       {k:"status",l:"결재",t:"select",o:["신청","승인","반려"],badge:1,req:1},
       {k:"reason",l:"사유",t:"textarea",hide:1}
@@ -3815,16 +3820,18 @@ function viewData(){
   <div class="card" style="margin-bottom:16px">
     <div class="card-head">
       <div class="card-title">다우오피스 연동<span class="sub">${DAOU.configured ? esc(DAOU.host||"") : "위에서 다우오피스에 연결하면 사용할 수 있습니다"}</span></div>
-      <div class="right"><button class="btn btn-sm" id="daou-test">연결 테스트</button></div>
+      <div class="right">
+        <button class="btn btn-sm" id="daou-attnd-code">근태 유형 등록</button>
+        <button class="btn btn-sm" id="daou-test">연결 테스트</button></div>
     </div>
     <div id="daou-result"></div>
     <div>
       ${(DAOU.apis||[]).map(a=>{
         return `<div class="list-row">
-          <span class="badge ${a.dir==="읽기"?"info":"coral"}" style="min-width:44px;justify-content:center">${esc(a.dir)}</span>
+          <span class="badge ${a.dir==="읽기"?"info":a.dir==="인증"?"ok":"coral"}" style="min-width:44px;justify-content:center">${esc(a.dir)}</span>
           <div class="list-main">
             <div class="t">${esc(a.label)} <span class="muted" style="font-weight:400">→ ${esc(a.target)}</span></div>
-            <div class="s">${esc(a.key==="attndRead" ? (attndPath() || "주소 미확인 — 아래에서 찾거나 직접 입력") : a.path)} · ${esc(a.limit)}</div>
+            <div class="s">${esc(a.path)}${a.limit ? " · " + esc(a.limit) : ""}</div>
           </div>
           <div class="data-actions">
             ${a.test ? `<button class="btn btn-sm" data-api-test="${esc(a.key)}">테스트</button>` : ""}
@@ -3949,21 +3956,27 @@ function bindData(){
   c.querySelectorAll("[data-api-test]").forEach(b=>b.onclick=()=>{
     const a = DIRECT_APIS.find(x=>x.key===b.dataset.apiTest);
     if(!a) return;
-    if(a.key === "attndRead"){
-      const [f, t] = monthRange();
-      return showTest("근태 조회", ()=>{
-        const saved = attndPath();
-        if(saved) return pullAttendance(f, t);
-        return probeAttndRead(f, t).then(res=>{
-          if(!res.found) throw new Error("동작하는 주소를 찾지 못했습니다.\n\n" + res.tried.join("\n"));
-          DB._daou = Object.assign({}, DB._daou, {attndPath: res.found});
-          saveDB(); resolveDirect();
-          return res.sample;
-        });
-      });
-    }
-    showTest(a.label, ()=>a.key==="dept" ? fetchDeptsDirect() : daouDirect(a.path));
+    const [tf, tt] = monthRange();
+    const RUN = {
+      token:      ()=>daouToken(true).then(t=>({발급됨:t.slice(0,24) + "…", 유효기간:"1일"})),
+      account:    ()=>daouGet("/public/api/attnd-v3/organization-chart/user/list"),
+      dept:       ()=>fetchDeptsDirect(),
+      deptMember: ()=>daouGet("/public/api/attnd-v3/organization-chart/member/list"),
+      domainCode: ()=>Promise.all([fetchDomainCodes("position"), fetchDomainCodes("grade")])
+                       .then(([p, g])=>({직위:p, 직급:g})),
+      attndRead:  ()=>fetchAttndHistory(tf, tt),
+      vacation:   ()=>fetchVacationHistory(tf, tt),
+      annual:     ()=>fetchAnnualLeave(todayStr)
+    };
+    if(!RUN[a.key]) return;
+    showTest(a.label, RUN[a.key]);
   });
+  const codeBtn = document.getElementById("daou-attnd-code");
+  if(codeBtn) codeBtn.onclick = ()=>{
+    if(!DIRECT){ alert("먼저 위에서 다우오피스에 연결하세요."); return; }
+    if(!confirm("6pence 근태 유형 6가지(연차·반차·병가·경조사·출장·재택근무)를\n다우오피스 근태 상태 코드로 등록합니다.\n계속할까요?")) return;
+    showTest("근태 유형 등록", ()=>registerAttndCodes());
+  };
   const syncDeptBtn = document.getElementById("daou-dept-sync");
   if(syncDeptBtn) syncDeptBtn.onclick = ()=>{
     toast("부서를 다시 불러옵니다…");
@@ -4282,16 +4295,105 @@ function resolveDirect(){
 const DAOU_URL = "https://api.daouoffice.com";
 
 const DIRECT_APIS = [
-  {key:"account",    label:"계정 조회",     dir:"읽기", path:"/public/v1/account",      target:"임직원 관리",      limit:"월 900회",   test:1},
-  {key:"dept",       label:"조직도 조회",   dir:"읽기", path:"/public/v1/dept",         target:"부서 현황 · 부서 선택지", limit:"월 900회", test:1},
-  {key:"deptMember", label:"부서원 조회",   dir:"읽기", path:"/public/v1/dept/member",  target:"소속 부서 · 사번", limit:"월 900회",   test:1},
-  {key:"attndRead",  label:"근태 조회",     dir:"읽기", path:"자동 탐색", target:"근태 / 휴가 가져오기", limit:"월 900회", test:1},
-  {key:"approval",   label:"전자결재 연동", dir:"쓰기", path:"/public/v4/approval/document", target:"지출결의 · 근태 · 법무검토 · 법인등기", limit:"월 600회"},
-  {key:"attnd",      label:"근태 연동",     dir:"쓰기", path:"/public/v2/attnd/record", target:"근태 / 휴가 보내기", limit:"일 50 · 월 1,500회"},
-  {key:"noti",       label:"알림 연동",     dir:"쓰기", path:"/public/v1/noti",         target:"마감·담당자 있는 모든 화면", limit:"월 1,500회"},
-  {key:"works",      label:"Works 연동",    dir:"쓰기", path:"/public/v1/works",        target:"월간 · 반복 업무 · 마감일", limit:"월 1,500회"},
+  {key:"token",      label:"Access Token 발행", dir:"인증", path:"/public/auth/v1/oauth2/token", target:"모든 조회 API의 사전 단계", limit:"유효 1일", test:1},
+  {key:"account",    label:"계정 정보 조회", dir:"읽기", path:"/public/api/attnd-v3/organization-chart/user/list", target:"임직원 관리", limit:"", test:1},
+  {key:"dept",       label:"부서 정보 조회", dir:"읽기", path:"/public/api/attnd-v3/organization-chart/department/list", target:"부서 현황 · 부서 선택지", limit:"", test:1},
+  {key:"deptMember", label:"부서원 정보 조회", dir:"읽기", path:"/public/api/attnd-v3/organization-chart/member/list", target:"소속 부서", limit:"", test:1},
+  {key:"domainCode", label:"직위·직급·직책 조회", dir:"읽기", path:"/public/api/attnd-v3/organization-chart/domain-code/…/list", target:"직급 선택지", limit:"", test:1},
+  {key:"attndRead",  label:"근태 이력 조회", dir:"읽기", path:"/public/api/attnd-v2/attnd", target:"근태 / 휴가 가져오기", limit:"최대 31일", test:1},
+  {key:"vacation",   label:"연차 이력 조회", dir:"읽기", path:"/public/api/attnd-v2/vacation", target:"근태 / 휴가 가져오기", limit:"최대 31일", test:1},
+  {key:"annual",     label:"연차 현황 조회", dir:"읽기", path:"/public/api/attnd-v2/annual-leave", target:"임직원 잔여·사용 연차", limit:"기준일", test:1},
+  {key:"approval",   label:"결재 기안",     dir:"쓰기", path:"/public/v4/approval/document", target:"지출결의 · 근태 · 법무검토 · 법인등기", limit:"월 600회"},
+  {key:"attnd",      label:"근태 기록 등록", dir:"쓰기", path:"/public/v2/attnd/record", target:"근태 / 휴가 보내기", limit:"일 50 · 월 1,500회"},
+  {key:"attndCode",  label:"근태 유형 등록", dir:"쓰기", path:"/public/v2/attnd/code",   target:"6pence 근태 유형 → 다우오피스", limit:""},
+  {key:"noti",       label:"알림 발송",     dir:"쓰기", path:"/public/v1/noti",         target:"마감·담당자 있는 모든 화면", limit:"월 1,500회"},
+  {key:"works",      label:"Works 데이터 등록", dir:"쓰기", path:"/public/v1/works",    target:"월간 · 반복 업무 · 마감일", limit:"월 1,500회"},
 ];
 
+/* ============================================================
+   조회(읽기) API — Access Token 방식
+   다우오피스 조회 API는 먼저 Access Token 을 발급받고
+   Authorization: Bearer {토큰} 헤더로 GET 호출합니다.
+     토큰 발급  POST /public/auth/v1/oauth2/token
+                Authorization: Basic base64(clientId:clientSecret)
+                grant_type=client_credentials
+     유효기간   1일 (86400초) — 만료되면 자동으로 다시 받습니다
+   ============================================================ */
+let TOKEN = null;
+let TOKEN_INFLIGHT = null;
+function daouToken(force){
+  if(!DIRECT) return Promise.reject(new Error("다우오피스에 연결되어 있지 않습니다."));
+  if(!force && TOKEN && TOKEN.exp > Date.now() + 60000) return Promise.resolve(TOKEN.value);
+  /* 여러 조회가 동시에 시작해도 토큰은 한 번만 발급받는다 */
+  if(!force && TOKEN_INFLIGHT) return TOKEN_INFLIGHT;
+  let basic;
+  try{ basic = btoa(`${DIRECT.clientId}:${DIRECT.clientSecret}`); }
+  catch(e){ return Promise.reject(new Error("인증키에 쓸 수 없는 문자가 있습니다.")); }
+  const req = fetch(DAOU_URL + "/public/auth/v1/oauth2/token", {
+    method: "POST",
+    headers: {"Authorization": "Basic " + basic,
+              "Content-Type": "application/x-www-form-urlencoded"},
+    body: "grant_type=client_credentials"
+  }).then(r=>r.json()).then(j=>{
+    if(!j || !j.access_token)
+      throw new Error(`[${(j&&j.code)||"?"}] ${(j&&j.message)||"토큰 발급 실패"} ${(j&&j.messageDetail)||""}`.trim());
+    TOKEN = {value:j.access_token, exp: Date.now() + (Number(j.expires_in)||86400)*1000};
+    return TOKEN.value;
+  });
+  TOKEN_INFLIGHT = req.finally(()=>{ TOKEN_INFLIGHT = null; });
+  return TOKEN_INFLIGHT;
+}
+
+function daouGet(path, params){
+  const qs = params
+    ? "?" + new URLSearchParams(Object.entries(params).filter(([,v])=>v!=="" && v!=null)).toString()
+    : "";
+  const call = tok => fetch(DAOU_URL + path + qs, {headers:{"Authorization":"Bearer " + tok}})
+    .then(r=>{
+      if(r.status === 401){ const e = new Error("401"); e.__401 = true; throw e; }
+      return r.json();
+    });
+  return daouToken()
+    .then(call)
+    .catch(e=>{ if(e && e.__401) return daouToken(true).then(call); throw e; })
+    .then(j=>{
+      if(j && j.code != null && String(j.code) !== "200")
+        throw new Error(`[${j.code}] ${j.message||""} ${j.messageDetail||""}`.trim());
+      return (j && j.data !== undefined) ? j.data : j;
+    });
+}
+
+/* 페이지가 나뉘어 오는 조회는 끝까지 모아서 돌려준다 */
+function daouGetAll(path, params){
+  const out = [];
+  const step = page => daouGet(path, Object.assign({}, params, {page, pageSize:100})).then(d=>{
+    const el = (d && Array.isArray(d.elements)) ? d.elements : (Array.isArray(d) ? d : []);
+    el.forEach(x=>out.push(x));
+    const pg = d && d.page;
+    if(pg && Number(pg.currentPage) + 1 < Number(pg.totalPages) && page < 60) return step(page + 1);
+    return out;
+  });
+  return step(0);
+}
+
+/* 조회 기간은 최대 31일 — 길면 잘라서 여러 번 부른다 */
+function dateChunks(from, to, maxDays){
+  const f = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const out = [];
+  let cur = new Date(from + "T00:00:00");
+  const end = new Date(to + "T00:00:00");
+  let guard = 0;
+  while(cur <= end && guard++ < 40){
+    const stop = new Date(cur);
+    stop.setDate(stop.getDate() + maxDays - 1);
+    out.push([f(cur), f(stop > end ? end : stop)]);
+    cur = new Date(stop);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+/* ---------------- 등록(쓰기) API — 인증키를 본문에 담는 방식 ---------------- */
 function daouDirect(path, extra, method){
   const body = Object.assign({
     clientId: DIRECT.clientId, clientSecret: DIRECT.clientSecret,
@@ -4307,48 +4409,61 @@ function daouDirect(path, extra, method){
   });
 }
 
-/* 계정 + 부서원을 합쳐 임직원 명부 (서버판 fetch_employees 와 동일한 규칙) */
+/* 계정 + 부서원 + 부서 를 합쳐 임직원 명부를 만든다 (조회 API, 문서 기준)
+     계정   GET /public/api/attnd-v3/organization-chart/user/list
+     부서원 GET /public/api/attnd-v3/organization-chart/member/list
+     부서   GET /public/api/attnd-v3/organization-chart/department/list */
+const DAOU_STATUS = {ONLINE:"재직", NORMAL:"재직", STOP:"퇴사", DORMANT:"휴직"};
+const DAOU_EMPTYPE = {PERMANENT:"정규직", TEMPORARY:"계약직", OUTSOURCED:"외주",
+                      DISPATCHED:"파견", PART_TIME:"파트", OTHER:"기타"};
+const mlName = o => (o && o.multiLanguageName && o.multiLanguageName.koName) || (o && o.name) || "";
+
 function fetchEmployeesDirect(){
-  const STATUS = {NORMAL:"재직", ONLINE:"재직", STOP:"퇴사", DORMANT:"휴직"};
   return Promise.all([
-    daouDirect("/public/v1/account"),
-    daouDirect("/public/v1/dept/member").catch(()=>[])
-  ]).then(([accounts, members])=>{
-    const byLogin = {};
-    (members||[]).forEach(m=>{ if(m && m.loginId) byLogin[m.loginId] = m; });
-    return (accounts||[]).map(a=>{
-      const m = byLogin[a.loginId] || {};
-      return {
-        empNo:    String(a.employeeNumber || m.employeeNumber || ""),
-        name:     a.koName || m.userName || "",
-        dept:     m.orgName || "",
-        position: a.positionName || a.gradeName || m.dutyName || "",
-        type:     "정규직",
-        joinDate: "",
-        email:    a.email || "",
-        phone:    a.mobileNo || a.directTel || "",
-        status:   STATUS[String(a.status||"").toUpperCase()] || "재직",
-      };
+    daouGet("/public/api/attnd-v3/organization-chart/user/list"),
+    daouGet("/public/api/attnd-v3/organization-chart/member/list").catch(()=>[]),
+    daouGet("/public/api/attnd-v3/organization-chart/department/list").catch(()=>[])
+  ]).then(([users, members, depts])=>{
+    const deptName = {};
+    (depts||[]).forEach(d=>{ if(d && d.code) deptName[d.code] = mlName(d); });
+
+    /* 겸직이면 departmentOrder 가 가장 앞선 부서를 주 부서로 본다 */
+    const primary = {};
+    (members||[]).forEach(m=>{
+      if(!m || !m.loginId) return;
+      const cur = primary[m.loginId];
+      if(!cur || Number(m.departmentOrder||99) < Number(cur.departmentOrder||99)) primary[m.loginId] = m;
     });
+
+    return (users||[]).map(u=>{
+      const m = primary[u.loginId] || {};
+      const login = String(u.loginId || "");
+      return {
+        empNo:    String(u.employeeNumber || m.employeeNumber || ""),
+        name:     mlName(u) || u.name || "",
+        dept:     deptName[m.departmentCode] || "",
+        position: u.positionName || u.gradeName || "",
+        type:     DAOU_EMPTYPE[String(u.employeeType||"").toUpperCase()] || "정규직",
+        joinDate: String(u.joinDate || u.recognizedJoinDate || "").slice(0,10),
+        email:    u.externalEmail || (login.indexOf("@") > 0 ? login : ""),
+        phone:    u.mobileNo || u.directTel || "",
+        status:   u.expiredDate ? "퇴사" : (DAOU_STATUS[String(u.status||"").toUpperCase()] || "재직")
+      };
+    }).filter(r=>r.name);
   });
 }
 
-/* ---------------- 부서 조회 (/public/v1/dept) ----------------
-   다우오피스 조직도를 그대로 받아 6pence 부서 선택지에 반영합니다.
-   · 계층(상위부서)까지 받아 경로를 만들어 둡니다
-   · 부서명 목록은 DEPTS 배열을 제자리에서 갱신해 모든 선택 상자에 즉시 반영됩니다
-------------------------------------------------------------- */
+/* 부서 조회 — 조직도를 그대로 받아 계층 경로를 만든다 */
 function fetchDeptsDirect(){
-  return daouDirect("/public/v1/dept").then(list=>{
+  return daouGet("/public/api/attnd-v3/organization-chart/department/list").then(list=>{
     const raw = (list||[]).map(d=>({
-      id:       String(d.id != null ? d.id : (d.deptId != null ? d.deptId : "")),
-      parentId: String(d.parentId != null ? d.parentId : (d.parentDeptId != null ? d.parentDeptId : "")),
-      name:     d.name || d.deptName || d.orgName || "",
-      code:     d.code || d.deptCode || "",
-      order:    Number(d.sortOrder != null ? d.sortOrder : (d.order || 0)) || 0
+      id:       String(d.code || ""),
+      parentId: String(d.parentCode || ""),
+      name:     mlName(d),
+      code:     String(d.code || ""),
+      order:    Number(d.sortOrder || 0) || 0
     })).filter(d=>d.name);
 
-    /* 상위부서를 따라 올라가며 "본부 > 팀" 경로를 만든다 (순환 방지 8단계) */
     const byId = {};
     raw.forEach(d=>{ if(d.id) byId[d.id] = d; });
     raw.forEach(d=>{
@@ -4389,6 +4504,32 @@ function mergeDepts(list){
 
 function deptTree(){ return (DB && DB._depts) || []; }
 
+/* 직위·직급·직책·사용자그룹 — 직위/직급을 6pence 직급 선택지로 쓴다 */
+function fetchDomainCodes(kind){
+  return daouGet(`/public/api/attnd-v3/organization-chart/domain-code/${kind}/list`)
+    .then(list=>(list||[]).map(x=>({code:String(x.code||""), name:mlName(x), order:Number(x.sortOrder||0)||0}))
+                          .filter(x=>x.name));
+}
+function syncPositions(){
+  return Promise.all([
+    fetchDomainCodes("position").catch(()=>[]),
+    fetchDomainCodes("grade").catch(()=>[])
+  ]).then(([pos, grade])=>{
+    const names = [];
+    pos.concat(grade).sort((a,b)=>a.order-b.order)
+       .forEach(x=>{ if(names.indexOf(x.name) < 0) names.push(x.name); });
+    if(!names.length) return {total:0, changed:false};
+    const before = POSITIONS.join("|");
+    const inUse = {};
+    rows("employees").forEach(e=>{ if(e.position) inUse[e.position] = 1; });
+    Object.keys(inUse).forEach(n=>{ if(names.indexOf(n) < 0) names.push(n); });
+    POSITIONS.length = 0;
+    names.forEach(n=>POSITIONS.push(n));
+    DB._positions = names;
+    return {total:names.length, changed: POSITIONS.join("|") !== before};
+  });
+}
+
 /* 전자결재 기안 — 브라우저가 다우오피스로 직접 폼 전송 */
 function approvalSubmitDirect(doc){
   const f = document.createElement("form");
@@ -4411,98 +4552,114 @@ function approvalSubmitDirect(doc){
   f.remove();
 }
 
-/* ---------------- 근태 조회 ----------------
-   다우오피스 근태 기록을 6pence 근태/휴가 화면으로 가져옵니다.
-   회사/버전마다 조회 주소가 달라서, 후보 주소를 순서대로 두드려 보고
-   응답하는 주소를 찾아 저장합니다. 한 번 찾으면 그 뒤로는 바로 씁니다.
-   (주소를 이미 아신다면 데이터 관리에서 직접 넣어도 됩니다)
---------------------------------------------------- */
-const ATTND_READ_CANDIDATES = [
-  "/public/v2/attnd/record/search",
-  "/public/v2/attnd/record/list",
-  "/public/v2/attnd/records",
-  "/public/v2/attnd/search",
-  "/public/v2/attnd/list",
-  "/public/v2/attnd/record",
-  "/public/v1/attnd/record/search",
-  "/public/v1/attnd/search",
-  "/public/v1/attnd/record",
-  "/public/v1/attnd"
-];
-
-function attndPath(){ return (DIRECT && DIRECT.attndPath) || ""; }
-
-/* 응답이 배열인지, {list:[...]} / {records:[...]} 같은 껍데기인지 가려낸다 */
-function asList(d){
-  if(Array.isArray(d)) return d;
-  if(!d || typeof d !== "object") return null;
-  const keys = ["list","records","record","items","content","data","result","rows","attndList"];
-  for(const k of keys) if(Array.isArray(d[k])) return d[k];
-  return null;
-}
-
-/* 후보 주소를 하나씩 호출해 목록을 돌려주는 첫 주소를 찾는다 */
-function probeAttndRead(from, to){
-  const tried = [];
-  const body = {startDate:from, endDate:to, fromDate:from, toDate:to,
-                startYmd:from.replace(/-/g,""), endYmd:to.replace(/-/g,"")};
-  const next = i => {
-    if(i >= ATTND_READ_CANDIDATES.length) return Promise.resolve({found:null, tried});
-    const path = ATTND_READ_CANDIDATES[i];
-    return daouDirect(path, body)
-      .then(d=>{
-        const list = asList(d);
-        if(list){ return {found:path, sample:list.slice(0,3), count:list.length, tried}; }
-        tried.push(`${path} — 목록이 아닌 응답`);
-        return next(i+1);
-      })
-      .catch(e=>{ tried.push(`${path} — ${String(e.message||e).slice(0,80)}`); return next(i+1); });
-  };
-  return next(0);
-}
-
-/* 다우오피스 근태 한 건 → 6pence 근태/휴가 한 줄
-   키 이름이 버전마다 달라서 흔한 이름을 모두 살펴봅니다. */
-const anyOf = (o, ...keys) => { for(const k of keys) if(o[k] != null && o[k] !== "") return o[k]; return ""; };
-const ymd = v => {
-  const t = String(v==null?"":v).trim();
-  if(/^\d{8}$/.test(t)) return `${t.slice(0,4)}-${t.slice(4,6)}-${t.slice(6,8)}`;
-  if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10);
-  return t;
-};
-const hhmm = v => {
-  const t = String(v==null?"":v).trim();
-  if(!t) return "";
-  if(/^\d{4}$/.test(t)) return `${t.slice(0,2)}:${t.slice(2,4)}`;
-  const m = t.match(/(\d{1,2}):(\d{2})/);
-  return m ? `${String(m[1]).padStart(2,"0")}:${m[2]}` : t;
+/* ============================================================
+   근태 · 휴가 · 연차 조회 (문서 기준, Access Token 방식)
+     근태 이력  GET /public/api/attnd-v2/attnd?startDate&endDate
+     연차 이력  GET /public/api/attnd-v2/vacation?startDate&endDate
+     연차 현황  GET /public/api/attnd-v2/annual-leave?baseDate
+   조회 기간은 최대 31일이라 길면 잘라서 여러 번 부릅니다.
+   ============================================================ */
+const timeOf = v => { const t = String(v||""); const m = t.match(/(\d{2}):(\d{2})/); return m ? `${m[1]}:${m[2]}` : ""; };
+const dateOf = v => String(v||"").slice(0,10);
+const qtyOf  = v => { const m = String(v||"").match(/-?[\d.]+/); return m ? Number(m[0]) : ""; };
+/* "08:40:00" → 8.7 시간 */
+const hoursOf = v => {
+  const m = String(v||"").match(/^(\d+):(\d{2})/);
+  return m ? Math.round((Number(m[1]) + Number(m[2])/60) * 10) / 10 : "";
 };
 
-function normalizeAttnd(list){
-  const byNo = {};
-  rows("employees").forEach(e=>{ if(e.empNo) byNo[String(e.empNo)] = e; });
-  return (list||[]).map(a=>{
-    const no   = String(anyOf(a,"employeeNumber","empNo","employeeNo","userEmployeeNumber"));
-    const emp  = byNo[no] || {};
-    const day  = ymd(anyOf(a,"workingDay","workDate","targetDate","attndDate","date","ymd"));
-    const kind = String(anyOf(a,"attndTypeName","typeName","codeName","attndName","kindName","code","attndCode") || "");
+/* 사번 또는 로그인ID 로 6pence 임직원 찾기 */
+function empByAny(r){
+  const no = String(r.employeeNumber || "");
+  const li = String(r.loginId || "");
+  const nm = String(r.name || "");
+  const all = rows("employees");
+  return all.find(e=>no && String(e.empNo)===no)
+      || all.find(e=>li && String(e.email).toLowerCase()===li.toLowerCase())
+      || all.find(e=>nm && e.name===nm)
+      || {};
+}
+
+/* 근태 이력 → 근태/휴가 행 */
+function fetchAttndHistory(from, to){
+  return dateChunks(from, to, 31).reduce((chain, [f, t])=>chain.then(acc=>
+    daouGetAll("/public/api/attnd-v2/attnd", {startDate:f, endDate:t}).then(r=>acc.concat(r))
+  ), Promise.resolve([])).then(list=>list.map(a=>{
+    const e = empByAny(a);
     return {
-      empNo:    no,
-      name:     anyOf(a,"userName","koName","name","employeeName") || emp.name || "",
-      dept:     anyOf(a,"orgName","deptName","departmentName") || emp.dept || "",
-      kind:     kind,
-      startDate: day,
-      endDate:  ymd(anyOf(a,"endDate","endDay")) || day,
-      clockIn:  hhmm(anyOf(a,"clockInTime","startTime","checkInTime","inTime","workStartTime")),
-      clockOut: hhmm(anyOf(a,"clockOutTime","endTime","checkOutTime","outTime","workEndTime")),
-      status:   "승인"
+      empNo:    String(a.employeeNumber || e.empNo || ""),
+      name:     a.name || e.name || "",
+      dept:     e.dept || "",
+      kind:     a.dayWorkStatusName || "정상근무",
+      startDate: dateOf(a.accrualDate),
+      endDate:  dateOf(a.accrualDate),
+      clockIn:  timeOf(a.startWorkTime),
+      clockOut: timeOf(a.endWorkTime),
+      workHours: hoursOf(a.sumWorkingHours),
+      overHours: hoursOf(a.extendedWorkingHours),
+      status:   "승인",
+      _src:     "근태"
     };
-  }).filter(r=>r.startDate && (r.name || r.empNo));
+  }).filter(r=>r.startDate));
+}
+
+/* 연차(휴가) 이력 → 근태/휴가 행 */
+const DOC_STATUS = {APPROVAL:"승인", COMPLETE:"승인", PROCEEDING:"신청", REJECT:"반려", RETURN:"반려"};
+function fetchVacationHistory(from, to){
+  return dateChunks(from, to, 31).reduce((chain, [f, t])=>chain.then(acc=>
+    daouGetAll("/public/api/attnd-v2/vacation", {startDate:f, endDate:t}).then(r=>acc.concat(r))
+  ), Promise.resolve([])).then(list=>list.map(a=>{
+    const e = empByAny(a);
+    const day = dateOf(a.leaveDate || a.workReferenceDate || a.leaveStartTime);
+    const hrs = hoursOf(a.usedLeaveDuration);
+    return {
+      empNo:    String(a.employeeNumber || e.empNo || ""),
+      name:     a.name || e.name || "",
+      dept:     e.dept || "",
+      kind:     a.leaveCategoryName || "휴가",
+      startDate: day,
+      endDate:  dateOf(a.leaveEndTime) || day,
+      days:     hrs === "" ? "" : Math.round(hrs / 8 * 10) / 10,
+      clockIn:  a.isAllDay ? "" : timeOf(a.leaveStartTime),
+      clockOut: a.isAllDay ? "" : timeOf(a.leaveEndTime),
+      reason:   a.docNum ? `전자결재 ${a.docNum}` : "",
+      status:   DOC_STATUS[String(a.docStatusCode||"").toUpperCase()] || "승인",
+      _src:     "휴가"
+    };
+  }).filter(r=>r.startDate));
+}
+
+/* 연차 현황 → 임직원의 잔여/사용/총 연차 */
+function fetchAnnualLeave(baseDate){
+  return daouGetAll("/public/api/attnd-v2/annual-leave", {baseDate}).then(list=>(list||[]).map(a=>({
+    empNo:   String(a.employeeNumber || ""),
+    loginId: String(a.loginId || ""),
+    name:    a.name || "",
+    joinDate: dateOf(a.joinDate),
+    annualRemain: qtyOf(a.remainQuantity),
+    annualUsed:   qtyOf(a.usedQuantity),
+    annualTotal:  qtyOf(a.totalQuantity)
+  })));
+}
+
+function mergeAnnualLeave(list){
+  let updated = 0;
+  list.forEach(r=>{
+    const e = empByAny(r);
+    if(!e || !e._id) return;
+    let changed = false;
+    ["annualRemain","annualUsed","annualTotal"].forEach(f=>{
+      if(r[f] !== "" && e[f] !== r[f]){ e[f] = r[f]; changed = true; }
+    });
+    if(r.joinDate && !e.joinDate){ e.joinDate = r.joinDate; changed = true; }
+    if(changed) updated++;
+  });
+  return {updated, total:list.length};
 }
 
 /* 같은 사람·같은 날짜·같은 유형이면 같은 기록으로 본다 */
 const attndKey = r => [String(r.empNo||""), String(r.name||""), String(r.startDate||""), String(r.kind||"")].join("|");
-const ATTND_OWNED = ["name","dept","kind","endDate","clockIn","clockOut"];
+const ATTND_OWNED = ["name","dept","kind","endDate","clockIn","clockOut","workHours","overHours","days","status","reason"];
 
 function mergeAttendance(list){
   const index = {};
@@ -4512,11 +4669,11 @@ function mergeAttendance(list){
     const cur = index[attndKey(r)];
     if(cur){
       let changed = false;
-      ATTND_OWNED.forEach(f=>{ if(r[f] && cur[f] !== r[f]){ cur[f] = r[f]; changed = true; } });
+      ATTND_OWNED.forEach(f=>{ if(r[f] !== "" && r[f] != null && cur[f] !== r[f]){ cur[f] = r[f]; changed = true; } });
       if(changed) updated++;
     }else{
       const rec = Object.assign({_id:uid()}, defaultsFor("attendance", 0));
-      Object.keys(r).forEach(f=>{ if(r[f] !== "" && r[f] != null) rec[f] = r[f]; });
+      Object.keys(r).forEach(f=>{ if(f[0] !== "_" && r[f] !== "" && r[f] != null) rec[f] = r[f]; });
       DB.attendance.push(rec);
       index[attndKey(rec)] = rec; added++;
     }
@@ -4524,26 +4681,20 @@ function mergeAttendance(list){
   return {added, updated, total:list.length};
 }
 
-/* 기간을 받아 실제로 가져오기 — 주소를 모르면 먼저 찾는다 */
-function pullAttendance(from, to){
-  const body = {startDate:from, endDate:to, fromDate:from, toDate:to,
-                startYmd:from.replace(/-/g,""), endYmd:to.replace(/-/g,"")};
-  const run = path => daouDirect(path, body).then(d=>{
-    const list = asList(d);
-    if(!list) throw new Error("근태 목록을 찾을 수 없는 응답입니다.");
-    return list;
-  });
-  const saved = attndPath();
-  if(saved) return run(saved);
-  return probeAttndRead(from, to).then(res=>{
-    if(!res.found){
-      const e = new Error("근태 조회 주소를 찾지 못했습니다.\n\n시도한 주소:\n" + res.tried.join("\n"));
-      e.probe = res; throw e;
-    }
-    DB._daou = Object.assign({}, DB._daou, {attndPath: res.found});
-    saveDB(); resolveDirect();
-    return run(res.found);
-  });
+/* ---------------- 근태 유형 등록 (/public/v2/attnd/code) ----------------
+   6pence 근태 유형(연차·반차·병가…)을 다우오피스 근태 상태 코드로 등록합니다.
+   등록해 두면 근태 기록을 보낼 때 이 코드로 유형까지 함께 전달됩니다. */
+const ATTND_CODE = {연차:"6PENCE_ANNUAL", 반차:"6PENCE_HALF", 병가:"6PENCE_SICK",
+                    경조사:"6PENCE_FAMILY", 출장:"6PENCE_TRIP", 재택근무:"6PENCE_REMOTE"};
+function attndCodeOf(kind){ return ATTND_CODE[kind] || ""; }
+
+function registerAttndCodes(){
+  const data = Object.keys(ATTND_CODE).map(k=>({
+    timelineCode: ATTND_CODE[k], name: k,
+    includeWorkingTime: (k !== "연차" && k !== "반차" && k !== "병가"),
+    useYN: true
+  }));
+  return daouDirect("/public/v2/attnd/code", {data}).then(()=>({count:data.length}));
 }
 
 /* ---------------- Works 연동 (/public/v1/works) ----------------
@@ -4646,7 +4797,8 @@ function autoSync(){
   /* 부서는 실패해도 임직원 최신화는 계속 진행한다 */
   return Promise.all([
     fetchEmployeesDirect(),
-    fetchDeptsDirect().catch(e=>{ console.warn("부서 조회 실패", e); return null; })
+    fetchDeptsDirect().catch(e=>{ console.warn("부서 조회 실패", e); return null; }),
+    syncPositions().catch(e=>{ console.warn("직위/직급 조회 실패", e); return null; })
   ]).then(([emps, depts])=>{
       const res  = mergeEmployees(emps || []);
       const dres = depts ? mergeDepts(depts) : {total:(DB._depts||[]).length};
@@ -4980,15 +5132,24 @@ function openAttndPullModal(){
   modalEl = document.createElement("div");
   modalEl.className = "overlay";
   modalEl.innerHTML = `<div class="modal">
-    <div class="modal-head"><div><h3>다우오피스 근태 가져오기</h3>
-      <div class="sub">기간 안의 근태 기록을 6pence 근태/휴가로 옮겨 적습니다</div></div></div>
+    <div class="modal-head"><div><h3>다우오피스에서 가져오기</h3>
+      <div class="sub">기간 안의 근태·휴가 기록을 6pence 근태/휴가로 옮겨 적습니다</div></div></div>
     <div class="modal-body">
       <div class="form-grid">
         <div class="form-row"><label>시작일</label><input id="ap-from" type="date" value="${esc(df)}"></div>
         <div class="form-row"><label>종료일</label><input id="ap-to" type="date" value="${esc(dt)}"></div>
       </div>
-      ${attndPath() ? "" : `<div class="note" style="margin-top:14px">${icon("info","ic-sm")}
-             <div>처음 한 번은 조회 주소를 찾느라 잠시 걸립니다. 다음부터는 바로 가져옵니다.</div></div>`}
+      <div class="form-row full" style="display:block;margin-top:12px">
+        <label style="display:block;margin-bottom:6px">가져올 항목</label>
+        <label style="display:block;padding:4px 0"><input type="checkbox" id="ap-attnd" checked>
+          <span style="margin-left:8px">근태 이력 — 출퇴근 시각, 근무시간</span></label>
+        <label style="display:block;padding:4px 0"><input type="checkbox" id="ap-vac" checked>
+          <span style="margin-left:8px">연차 이력 — 휴가 사용 내역, 결재 문서번호</span></label>
+        <label style="display:block;padding:4px 0"><input type="checkbox" id="ap-annual" checked>
+          <span style="margin-left:8px">연차 현황 — 임직원별 잔여·사용 연차</span></label>
+      </div>
+      <div class="note" style="margin-top:12px">${icon("info","ic-sm")}
+        <div>조회는 한 번에 최대 31일까지만 되기 때문에, 기간이 길면 나눠서 여러 번 부릅니다.</div></div>
       <div id="ap-result"></div>
     </div>
     <div class="modal-foot">
@@ -5003,33 +5164,43 @@ function openAttndPullModal(){
   modalEl.querySelector("#ap-run").onclick = ()=>{
     const from = modalEl.querySelector("#ap-from").value;
     const to   = modalEl.querySelector("#ap-to").value;
+    const wantAttnd  = modalEl.querySelector("#ap-attnd").checked;
+    const wantVac    = modalEl.querySelector("#ap-vac").checked;
+    const wantAnnual = modalEl.querySelector("#ap-annual").checked;
     if(!from || !to){ alert("시작일과 종료일을 모두 고르세요."); return; }
     if(from > to){ alert("시작일이 종료일보다 늦습니다."); return; }
+    if(!wantAttnd && !wantVac && !wantAnnual){ alert("가져올 항목을 하나 이상 고르세요."); return; }
+
     const btn = modalEl.querySelector("#ap-run");
     const box = modalEl.querySelector("#ap-result");
-    btn.disabled = true; btn.textContent = attndPath() ? "가져오는 중…" : "주소 찾는 중…";
-    pullAttendance(from, to).then(list=>{
-      const norm = normalizeAttnd(list);
-      const res = mergeAttendance(norm);
+    btn.disabled = true; btn.textContent = "가져오는 중…";
+    const fail = [];
+    Promise.all([
+      wantAttnd  ? fetchAttndHistory(from, to).catch(e=>{ fail.push("근태 이력: " + (e.message||e)); return []; }) : [],
+      wantVac    ? fetchVacationHistory(from, to).catch(e=>{ fail.push("연차 이력: " + (e.message||e)); return []; }) : [],
+      wantAnnual ? fetchAnnualLeave(to).catch(e=>{ fail.push("연차 현황: " + (e.message||e)); return []; }) : []
+    ]).then(([attnd, vac, annual])=>{
+      const res = mergeAttendance(attnd.concat(vac));
+      const ann = annual.length ? mergeAnnualLeave(annual) : {updated:0};
       saveDB(); renderNav(); route();
+      if(fail.length && !res.total && !ann.updated){
+        btn.disabled = false; btn.textContent = "가져오기";
+        box.innerHTML = `<div class="note" style="margin-top:12px;background:var(--danger-bg)">${icon("alert","ic-sm")}
+          <div><b>가져오지 못했습니다</b>
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:pre-wrap;max-height:200px;overflow:auto;margin-top:6px">${esc(fail.join("\n"))}</div>
+          <div style="margin-top:8px">다우오피스 관리자에서 해당 API 사용여부가 <b>ON</b> 인지 확인해 주세요.</div></div></div>`;
+        return;
+      }
       closeModal();
-      toast(`근태 ${res.total}건 확인 · 추가 ${res.added} · 갱신 ${res.updated}`);
-      if(res.total && !norm.length)
-        alert("응답은 받았지만 6pence 형식으로 옮길 수 있는 항목이 없습니다.\n" +
-              "데이터 관리 > 근태 조회 [테스트] 를 눌러 실제로 받은 값을 확인해 주세요.");
-    }).catch(e=>{
-      btn.disabled = false; btn.textContent = "가져오기";
-      box.innerHTML = `<div class="note" style="margin-top:12px;background:var(--danger-bg)">${icon("alert","ic-sm")}
-        <div><b>가져오지 못했습니다</b>
-        <div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:pre-wrap;max-height:200px;overflow:auto;margin-top:6px">${esc(String(e.message||e))}</div>
-        <div style="margin-top:8px">다우오피스 관리자에서 <b>근태 조회</b> 사용여부가 <b>ON</b> 인지 확인해 주세요.</div></div></div>`;
+      const parts = [];
+      if(res.total) parts.push(`근태·휴가 ${res.total}건 (추가 ${res.added} · 갱신 ${res.updated})`);
+      if(ann.updated) parts.push(`연차 현황 ${ann.updated}명`);
+      toast(parts.length ? parts.join(" · ") : "가져올 기록이 없습니다.");
+      if(fail.length) alert("일부는 가져오지 못했습니다.\n\n" + fail.join("\n"));
     });
   };
 }
 
-/* ------------------------------------------------------------
-   다우오피스 동작 실행
-   ------------------------------------------------------------ */
 function daouAction(id, act, sel){
   if(!DIRECT){ alert("먼저 데이터 관리 화면에서 다우오피스에 연결하세요."); return; }
 
@@ -5074,7 +5245,13 @@ function daouAction(id, act, sel){
     picked.forEach(r=>{
       const no = empNoOf(r.name);
       if(!no){ skipped.push(r.name); return; }
-      data.push({employeeNumber:no, workingDay:r.startDate, code:r.kind});
+      const rec = {employeeNumber:no, workingDay:r.startDate};
+      /* 출퇴근 시각은 yyyy-MM-dd HH:mm:ss 형식으로 보낸다 */
+      if(r.clockIn)  rec.clockInTime  = `${r.startDate} ${r.clockIn}:00`;
+      if(r.clockOut) rec.clockOutTime = `${r.endDate || r.startDate} ${r.clockOut}:00`;
+      const code = attndCodeOf(r.kind);
+      if(code) rec.code = code;
+      data.push(rec);
     });
     if(!data.length){
       alert("보낼 수 있는 항목이 없습니다.\n다우오피스와 6pence의 사번(employeeNumber)이 맞아야 전송됩니다.");
