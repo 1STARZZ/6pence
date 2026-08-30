@@ -3470,7 +3470,6 @@ function bindDashboard(){
   document.querySelectorAll("[data-q]").forEach(b=>b.onclick=()=>{
     const q = b.dataset.q;
     if(q === "approval"){
-      if(!(DAOU.have||{}).formCode && DAOU.configured) return showSetup("approval");
       if(!DAOU.configured) return alert("먼저 데이터 관리 화면에서 다우오피스에 연결하세요.");
       return openApprovalDraft();
     }
@@ -3795,37 +3794,18 @@ function viewData(){
       ${DIRECT ? `
         <div class="note" style="margin-bottom:14px">${icon("check","ic-sm")}
           <div><b>연결되어 있습니다.</b> 클라이언트 아이디 <code>${esc((DIRECT.clientId||"").slice(0,6))}…</code>
-          · 인증키는 <b>이 브라우저에만</b> 저장되며 파일에는 들어가지 않습니다.</div></div>
-        <div class="form-grid">
-          <div class="form-row"><label>결재양식 코드</label>
-            <input id="d-form" value="${esc(DIRECT.formCode||"")}" placeholder="전자결재를 쓸 때만" autocomplete="off"></div>
-          <div class="form-row"><label>Works 토큰</label>
-            <input id="d-works" value="${esc(DIRECT.worksToken||"")}" placeholder="Works 연동을 쓸 때만" autocomplete="off"></div>
-          <div class="form-row"><label>알림 발신자 사번 <span class="form-hint">(선택)</span></label>
-            <input id="d-sender" value="${esc(DIRECT.senderEmpNo||"")}" placeholder="비우면 시스템 발신" autocomplete="off"></div>
-          <div class="form-row full"><label>근태 조회 주소
-              <span class="form-hint">모르면 비워 두세요 — 가져올 때 자동으로 찾습니다</span></label>
-            <input id="d-attnd" value="${esc(DIRECT.attndPath||"")}" placeholder="예: /public/v2/attnd/record/search" autocomplete="off"></div>
-          <div class="form-row" style="justify-content:flex-end;gap:8px">
-            <button class="btn" id="daou-save">${icon("check","ic-sm")} 설정 저장</button>
-            <button class="btn btn-danger" id="daou-disconnect">연결 해제</button></div>
-        </div>
+          · 인증키는 <b>이 브라우저에만</b> 저장됩니다. 데이터를 비워도 연결은 유지됩니다.</div></div>
+        <button class="btn btn-danger btn-sm" id="daou-disconnect">연결 해제</button>
       ` : `
         <p class="muted" style="font-size:13px;margin:0 0 14px">
-          다우오피스 <b>관리자 &gt; 시스템 연동 &gt; OpenAPI</b> 에서 발급받은 값을 넣으면,
-          서버 없이 이 PC에서 바로 실시간 연동이 됩니다.</p>
+          다우오피스 <b>관리자 &gt; 시스템연동 &gt; OpenAPI</b> 에서 발급받은 인증키 두 개만 넣으면 됩니다.
+          켜 두신 API는 전부 이 인증키로 바로 동작합니다.</p>
         <div class="form-grid">
           <div class="form-row"><label>클라이언트 아이디</label>
             <input id="d-cid" placeholder="예: dafed5e5..." autocomplete="off"></div>
           <div class="form-row"><label>클라이언트 비밀번호</label>
             <input id="d-sec" type="password" placeholder="32자리" autocomplete="off"></div>
-          <div class="form-row"><label>결재양식 코드 <span class="form-hint">(선택)</span></label>
-            <input id="d-form" placeholder="전자결재를 쓸 때만" autocomplete="off"></div>
-          <div class="form-row"><label>Works 토큰 <span class="form-hint">(선택)</span></label>
-            <input id="d-works" placeholder="Works 연동을 쓸 때만" autocomplete="off"></div>
-          <div class="form-row"><label>알림 발신자 사번 <span class="form-hint">(선택)</span></label>
-            <input id="d-sender" placeholder="비우면 시스템 발신" autocomplete="off"></div>
-          <div class="form-row" style="justify-content:flex-end">
+          <div class="form-row full" style="justify-content:flex-end">
             <button class="btn btn-primary" id="daou-connect">${icon("check","ic-sm")} 연결하고 지금 동기화</button></div>
         </div>
       `}
@@ -3840,9 +3820,6 @@ function viewData(){
     <div id="daou-result"></div>
     <div>
       ${(DAOU.apis||[]).map(a=>{
-        const need = (a.needs||[]).filter(n=> n==="empNo" ? !DAOU.empNoReady : !(DAOU.have||{})[n]);
-        const setupKey = {attndPath:"attndPath"};
-        const label = {formCode:"결재양식 코드", worksToken:"Works 토큰", empNo:"사번 등록", attndPath:"조회 주소 찾기"};
         return `<div class="list-row">
           <span class="badge ${a.dir==="읽기"?"info":"coral"}" style="min-width:44px;justify-content:center">${esc(a.dir)}</span>
           <div class="list-main">
@@ -3851,16 +3828,13 @@ function viewData(){
           </div>
           <div class="data-actions">
             ${a.test ? `<button class="btn btn-sm" data-api-test="${esc(a.key)}">테스트</button>` : ""}
-            ${need.length
-              ? `<button class="badge warn" data-setup="${esc(need[0]==="empNo"?"empNo":(setupKey[need[0]]||need[0]))}"
-                   style="border:0;cursor:pointer">${need.map(n=>esc(label[n]||n)).join(" · ")} 필요 →</button>`
-              : `<span class="badge ok">사용 가능</span>`}
+            <span class="badge ok">사용 가능</span>
           </div>
         </div>`;
       }).join("") || `<div class="empty" style="padding:34px">${icon("inbox","ic-lg")}<div style="margin-top:10px">사내 서버로 열면 연동 상태가 표시됩니다.</div></div>`}
       ${DAOU.configured ? `<div class="note" style="margin:14px 24px 18px">${icon("info","ic-sm")}
-        <div><b>읽기</b>는 바로 쓸 수 있습니다. <b>쓰기</b>(전자결재·근태·알림·Works)는 다우오피스 쪽 사전 설정이 필요합니다 —
-        결재양식에 연동 코드 지정, 계정에 사번 입력, Works 토큰 발급. 받은 값은 위 <b>연결 설정</b> 칸에 넣으면 바로 열립니다.</div></div>` : ""}
+        <div>다우오피스 관리자에서 <b>사용여부 ON</b> 으로 켜 두신 API가 그대로 동작합니다.
+        꺼져 있는 API를 부르면 다우오피스가 돌려주는 오류 메시지를 그대로 보여 드립니다.</div></div>` : ""}
     </div>
   </div>
 
@@ -3947,7 +3921,6 @@ function bindData(){
     commit(area.items[0]); renderNav(); renderData();
     toast(`${area.label} 영역을 비웠습니다.`);
   });
-  c.querySelectorAll("[data-setup]").forEach(b=>b.onclick=()=>showSetup(b.dataset.setup));
   /* 읽기 API 는 한 건씩 실제로 불러 보고 결과를 그대로 보여 준다 */
   const showTest = (label, run) => {
     const box = document.getElementById("daou-result");
@@ -3985,7 +3958,6 @@ function bindData(){
           if(!res.found) throw new Error("동작하는 주소를 찾지 못했습니다.\n\n" + res.tried.join("\n"));
           DB._daou = Object.assign({}, DB._daou, {attndPath: res.found});
           saveDB(); resolveDirect();
-          DAOU.have = Object.assign({}, DAOU.have, {attndPath:true});
           return res.sample;
         });
       });
@@ -4006,22 +3978,10 @@ function bindData(){
   if(connectBtn) connectBtn.onclick = ()=>{
     const cid = val("d-cid"), sec = val("d-sec");
     if(!cid || !sec){ alert("클라이언트 아이디와 비밀번호를 모두 입력하세요."); return; }
-    DB._daou = {clientId:cid, clientSecret:sec, formCode:val("d-form"),
-                worksToken:val("d-works"), senderEmpNo:val("d-sender")};
+    DB._daou = {clientId:cid, clientSecret:sec};
     saveDB(); resolveDirect();
-    toast("연결했습니다. 다우오피스에서 임직원·부서를 불러옵니다…");
+    toast("연결했습니다. 다우오피스에서 불러옵니다…");
     checkDaou().then(()=>renderData());
-  };
-  /* 연결된 뒤에도 결재양식 코드·Works 토큰만 따로 고칠 수 있게 */
-  const saveBtn = document.getElementById("daou-save");
-  if(saveBtn) saveBtn.onclick = ()=>{
-    DB._daou = Object.assign({}, DB._daou, {
-      formCode: val("d-form"), worksToken: val("d-works"), senderEmpNo: val("d-sender"),
-      attndPath: val("d-attnd")
-    });
-    saveDB(); resolveDirect();
-    DAOU.have = {formCode:!!DIRECT.formCode, worksToken:!!DIRECT.worksToken, attndPath:!!DIRECT.attndPath};
-    renderData(); toast("설정을 저장했습니다.");
   };
   const disconnectBtn = document.getElementById("daou-disconnect");
   if(disconnectBtn) disconnectBtn.onclick = ()=>{
@@ -4248,7 +4208,6 @@ function checkDaou(){
   }
   DAOU = {configured:true, direct:true, host:DAOU_URL,
           clientId:(DIRECT.clientId||"").slice(0,6)+"…",
-          have:{formCode:!!DIRECT.formCode, worksToken:!!DIRECT.worksToken, attndPath:!!DIRECT.attndPath},
           apis:DIRECT_APIS};
   DAOU.empNoReady = empNoReady();
   route();
@@ -4323,14 +4282,14 @@ function resolveDirect(){
 const DAOU_URL = "https://api.daouoffice.com";
 
 const DIRECT_APIS = [
-  {key:"account",    label:"계정 조회",     dir:"읽기", path:"/public/v1/account",      target:"임직원 관리",      limit:"월 900회",   needs:[], test:1},
-  {key:"dept",       label:"부서 조회",     dir:"읽기", path:"/public/v1/dept",         target:"부서 현황 · 부서 선택지", limit:"월 900회", needs:[], test:1},
-  {key:"deptMember", label:"부서원 조회",   dir:"읽기", path:"/public/v1/dept/member",  target:"소속 부서 · 사번", limit:"월 900회",   needs:[], test:1},
-  {key:"approval",   label:"전자결재 기안", dir:"쓰기", path:"/public/v4/approval/document", target:"지출결의 · 근태 · 법무검토 · 법인등기", limit:"월 600회", needs:["formCode"]},
-  {key:"attnd",      label:"근태 기록 등록",dir:"쓰기", path:"/public/v2/attnd/record", target:"근태 / 휴가",      limit:"일 50 · 월 1,500회", needs:["empNo"]},
-  {key:"attndRead",  label:"근태 조회",     dir:"읽기", path:"", target:"근태 / 휴가 (가져오기)", limit:"월 900회", needs:["attndPath"], test:1},
-  {key:"noti",       label:"알림 발송",     dir:"쓰기", path:"/public/v1/noti",         target:"마감·담당자 있는 모든 화면", limit:"월 1,500회", needs:["empNo"]},
-  {key:"works",      label:"Works 연동",    dir:"쓰기", path:"/public/v1/works",        target:"월간 · 반복 업무 · 마감일", limit:"월 1,500회", needs:["worksToken"]},
+  {key:"account",    label:"계정 조회",     dir:"읽기", path:"/public/v1/account",      target:"임직원 관리",      limit:"월 900회",   test:1},
+  {key:"dept",       label:"조직도 조회",   dir:"읽기", path:"/public/v1/dept",         target:"부서 현황 · 부서 선택지", limit:"월 900회", test:1},
+  {key:"deptMember", label:"부서원 조회",   dir:"읽기", path:"/public/v1/dept/member",  target:"소속 부서 · 사번", limit:"월 900회",   test:1},
+  {key:"attndRead",  label:"근태 조회",     dir:"읽기", path:"자동 탐색", target:"근태 / 휴가 가져오기", limit:"월 900회", test:1},
+  {key:"approval",   label:"전자결재 연동", dir:"쓰기", path:"/public/v4/approval/document", target:"지출결의 · 근태 · 법무검토 · 법인등기", limit:"월 600회"},
+  {key:"attnd",      label:"근태 연동",     dir:"쓰기", path:"/public/v2/attnd/record", target:"근태 / 휴가 보내기", limit:"일 50 · 월 1,500회"},
+  {key:"noti",       label:"알림 연동",     dir:"쓰기", path:"/public/v1/noti",         target:"마감·담당자 있는 모든 화면", limit:"월 1,500회"},
+  {key:"works",      label:"Works 연동",    dir:"쓰기", path:"/public/v1/works",        target:"월간 · 반복 업무 · 마감일", limit:"월 1,500회"},
 ];
 
 function daouDirect(path, extra, method){
@@ -4441,7 +4400,7 @@ function approvalSubmitDirect(doc){
   put("clientSecret", DIRECT.clientSecret);
   put("productName", "6pence HQ");
   put("productVersion", "0.1");
-  put("formCode", DIRECT.formCode || "");
+  if(DIRECT.formCode) put("formCode", DIRECT.formCode);   /* 쓰는 회사만 값이 있다 */
   put("title", doc.title);
   put("content", doc.content);
   put("draftEmpNo", doc.draftEmpNo || "");
@@ -4617,7 +4576,7 @@ function worksPushDirect(id, picked){
   let ok = 0;
   const fails = [];
   return picked.reduce((chain, r)=>chain.then(()=>
-    daouDirect("/public/v1/works", {token: DIRECT.worksToken || "", params: worksParams(id, r)})
+    daouDirect("/public/v1/works", {params: worksParams(id, r)})
       .then(()=>{ ok++; })
       .catch(e=>{ fails.push(`${r.title || r.name || r._id}: ${e.message || e}`); })
   ), Promise.resolve()).then(()=>({ok, fails}));
@@ -4841,7 +4800,7 @@ function notiCandidates(){
 function daouPost(path, body, method){
   if(!DIRECT) return Promise.resolve({error:"다우오피스에 연결되어 있지 않습니다."});
   if(path === "noti") return daouDirect("/public/v1/noti", {
-    sender: body.sender || DIRECT.senderEmpNo || "",
+    sender: body.sender || "",
     receivers: body.receivers, message: body.message,
     mailTitle: body.mailTitle || body.message,
     mailMessage: body.mailMessage || body.message,
@@ -4849,75 +4808,9 @@ function daouPost(path, body, method){
   }).then(d=>({result:d})).catch(e=>({error:String(e.message||e)}));
   if(path === "attendance") return daouDirect("/public/v2/attnd/record", {data: body.data})
     .then(d=>({result:d, count:(body.data||[]).length})).catch(e=>({error:String(e.message||e)}));
-  if(path === "works") return daouDirect("/public/v1/works",
-    {token: DIRECT.worksToken || "", params: body.params || {}}, method)
+  if(path === "works") return daouDirect("/public/v1/works", {params: body.params || {}}, method)
     .then(d=>({result:d})).catch(e=>({error:String(e.message||e)}));
   return Promise.resolve({error:"지원하지 않는 요청입니다"});
-}
-
-/* 사전 설정 안내 */
-const SETUP_GUIDE = {
-  approval: {
-    title: "전자결재 연동을 켜려면",
-    steps: [
-      "다우오피스 <b>관리자 > 메뉴관리 > 전자결재 > 결재양식</b> 으로 이동합니다.",
-      "지출결의에 쓸 양식을 열고 저장 화면에서 <b>기타 > 시스템 연동 '사용'</b> 체크.",
-      "연동 종류를 <b>전자결재연동_v4</b> 로 선택하고, <b>코드</b>란에 원하는 값을 입력합니다 (예: <code>6penceExpense</code>).",
-      "그 코드를 <b>데이터 관리 &gt; 다우오피스 연결 설정</b> 의 <b>결재양식 코드</b> 칸에 넣고 저장합니다."
-    ],
-    note: "양식 코드가 있어야 다우오피스가 어떤 서식으로 기안할지 알 수 있습니다."
-  },
-  empNo: {
-    title: "근태·알림을 켜려면",
-    steps: [
-      "다우오피스 <b>관리자 > 계정 관리</b> 에서 각 임직원의 <b>사번(employeeNumber)</b> 을 입력합니다.",
-      "6pence는 매시 정각에 자동으로 사번을 받아옵니다 (즉시 반영은 사이드바 <b>지금 갱신</b>).",
-      "사번이 채워지면 근태 전송·알림 발송 버튼이 바로 동작합니다."
-    ],
-    get note(){
-      const total = rows("employees").filter(e=>e.status!=="퇴사").length;
-      const ready = notiCandidates().length;
-      return `다우오피스와 6pence가 같은 사번으로 사람을 맞춥니다. 현재 재직 ${total}명 중 <b>${ready}명</b>만 사번이 채워져 있습니다.`;
-    }
-  },
-  attndPath: {
-    title: "근태 조회를 켜려면",
-    steps: [
-      "다우오피스 <b>관리자 &gt; 시스템연동 &gt; OpenAPI</b> 에서 <b>근태 조회</b> 사용여부가 <b>ON</b> 인지 확인합니다.",
-      "6pence <b>근태 / 휴가</b> 화면에서 <b>다우오피스에서 가져오기</b> 를 누르고 기간을 고릅니다.",
-      "조회 주소를 모르면 처음 한 번 후보 주소를 차례로 확인해 자동으로 찾아 저장합니다.",
-      "주소를 이미 아신다면 위 <b>근태 조회 주소</b> 칸에 직접 넣어도 됩니다."
-    ],
-    note: "회사·버전마다 조회 주소가 달라서, 찾은 주소는 이 브라우저에 저장해 두고 다음부터 바로 씁니다."
-  },
-  worksToken: {
-    title: "Works 연동을 켜려면",
-    steps: [
-      "다우오피스 <b>Works > 관리 > 외부 데이터 가져오기</b> 를 <b>ON</b> 으로 바꿉니다.",
-      "발급된 <b>토큰</b>을 복사해 <b>데이터 관리 &gt; 다우오피스 연결 설정</b> 의 <b>Works 토큰</b> 칸에 넣습니다.",
-      "연동할 항목의 <b>파라미터명</b>을 Works 연동항목관리에서 확인합니다."
-    ],
-    note: "토큰을 발급한 계정 이름으로 변경 이력이 남습니다."
-  }
-};
-function showSetup(key){
-  const g = SETUP_GUIDE[key];
-  modalEl = document.createElement("div");
-  modalEl.className = "overlay";
-  modalEl.innerHTML = `<div class="modal">
-    <div class="modal-head"><div><h3>${esc(g.title)}</h3>
-      <div class="sub">다우오피스 쪽 설정이 먼저 필요합니다</div></div></div>
-    <div class="modal-body">
-      <ol style="padding-left:20px;line-height:2;font-size:14px;color:var(--ink-2)">
-        ${g.steps.map(t=>`<li>${t}</li>`).join("")}
-      </ol>
-      <div class="note" style="margin-top:8px">${icon("info","ic-sm")}<div>${g.note}</div></div>
-    </div>
-    <div class="modal-foot"><button class="btn btn-primary" id="g-close">알겠습니다</button></div></div>`;
-  document.body.appendChild(modalEl);
-  document.body.style.overflow = "hidden";
-  modalEl.onclick = e => { if(e.target===modalEl) closeModal(); };
-  modalEl.querySelector("#g-close").onclick = closeModal;
 }
 
 /* ------------------------------------------------------------
@@ -4973,6 +4866,12 @@ function openNotiModal(id, picked){
   const m = NOTI_MAP[id];
   const col = COLLECTIONS[id];
   const cands = notiCandidates();
+  if(!cands.length){
+    alert("알림을 받을 수 있는 임직원이 없습니다.\n\n" +
+          "다우오피스 계정에 사번(employeeNumber)이 들어 있어야 알림을 보낼 수 있습니다.\n" +
+          "사이드바 [지금 갱신] 으로 임직원을 다시 불러온 뒤 시도해 주세요.");
+    return;
+  }
 
   /* 선택한 행의 담당자 → 사번 */
   const preset = new Set();
@@ -5088,12 +4987,8 @@ function openAttndPullModal(){
         <div class="form-row"><label>시작일</label><input id="ap-from" type="date" value="${esc(df)}"></div>
         <div class="form-row"><label>종료일</label><input id="ap-to" type="date" value="${esc(dt)}"></div>
       </div>
-      ${attndPath()
-        ? `<div class="note" style="margin-top:14px">${icon("check","ic-sm")}
-             <div>조회 주소 <code>${esc(attndPath())}</code> 를 씁니다.</div></div>`
-        : `<div class="note" style="margin-top:14px">${icon("info","ic-sm")}
-             <div>근태 조회 주소를 아직 모릅니다. <b>처음 한 번만</b> 후보 주소를 차례로 확인해
-             동작하는 주소를 찾아 저장합니다. 잠시 걸릴 수 있습니다.</div></div>`}
+      ${attndPath() ? "" : `<div class="note" style="margin-top:14px">${icon("info","ic-sm")}
+             <div>처음 한 번은 조회 주소를 찾느라 잠시 걸립니다. 다음부터는 바로 가져옵니다.</div></div>`}
       <div id="ap-result"></div>
     </div>
     <div class="modal-foot">
@@ -5121,13 +5016,13 @@ function openAttndPullModal(){
       toast(`근태 ${res.total}건 확인 · 추가 ${res.added} · 갱신 ${res.updated}`);
       if(res.total && !norm.length)
         alert("응답은 받았지만 6pence 형식으로 옮길 수 있는 항목이 없습니다.\n" +
-              "받은 값의 항목 이름이 다를 수 있습니다. 데이터 관리 > 근태 조회 테스트로 실제 값을 확인해 주세요.");
+              "데이터 관리 > 근태 조회 [테스트] 를 눌러 실제로 받은 값을 확인해 주세요.");
     }).catch(e=>{
       btn.disabled = false; btn.textContent = "가져오기";
       box.innerHTML = `<div class="note" style="margin-top:12px;background:var(--danger-bg)">${icon("alert","ic-sm")}
         <div><b>가져오지 못했습니다</b>
         <div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:pre-wrap;max-height:200px;overflow:auto;margin-top:6px">${esc(String(e.message||e))}</div>
-        <div style="margin-top:8px">주소를 알고 계시면 <b>데이터 관리 &gt; 근태 조회 주소</b> 칸에 직접 넣어 주세요.</div></div></div>`;
+        <div style="margin-top:8px">다우오피스 관리자에서 <b>근태 조회</b> 사용여부가 <b>ON</b> 인지 확인해 주세요.</div></div></div>`;
     });
   };
 }
@@ -5151,12 +5046,6 @@ function daouAction(id, act, sel){
 
   /* 근태 조회 — 기간을 받아 가져온다 (선택 불필요) */
   if(act === "attndPull") return openAttndPullModal();
-
-  /* 사전 설정 확인 */
-  const have = DAOU.have || {};
-  if(act === "approval" && !have.formCode)             return showSetup("approval");
-  if(act === "works" && !(DIRECT && DIRECT.worksToken)) return showSetup("worksToken");
-  if((act === "attnd" || act === "noti") && !DAOU.empNoReady) return showSetup("empNo");
 
   const picked = rows(id).filter(r=>sel.has(r._id));
   if(!picked.length){
