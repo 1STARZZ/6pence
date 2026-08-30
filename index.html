@@ -3821,6 +3821,7 @@ function viewData(){
     <div class="card-head">
       <div class="card-title">다우오피스 연동<span class="sub">${DAOU.configured ? esc(DAOU.host||"") : "위에서 다우오피스에 연결하면 사용할 수 있습니다"}</span></div>
       <div class="right">
+        <button class="btn btn-sm" id="daou-token-probe">토큰 진단</button>
         <button class="btn btn-sm" id="daou-attnd-code">근태 유형 등록</button>
         <button class="btn btn-sm" id="daou-test">연결 테스트</button></div>
     </div>
@@ -3971,6 +3972,15 @@ function bindData(){
     if(!RUN[a.key]) return;
     showTest(a.label, RUN[a.key]);
   });
+  const probeBtn = document.getElementById("daou-token-probe");
+  if(probeBtn) probeBtn.onclick = ()=>{
+    if(!DIRECT){ alert("먼저 위에서 다우오피스에 연결하세요."); return; }
+    showTest("토큰 진단", ()=>probeToken().then(list=>{
+      const ok = list.find(r=>r.성공);
+      return {결과: ok ? `되는 방식을 찾았습니다 — ${ok.방식}` : "다섯 가지 모두 실패했습니다. 아래 응답을 그대로 알려주세요.",
+              시도: list};
+    }));
+  };
   const codeBtn = document.getElementById("daou-attnd-code");
   if(codeBtn) codeBtn.onclick = ()=>{
     if(!DIRECT){ alert("먼저 위에서 다우오피스에 연결하세요."); return; }
@@ -4321,24 +4331,100 @@ const DIRECT_APIS = [
    ============================================================ */
 let TOKEN = null;
 let TOKEN_INFLIGHT = null;
+let TOKEN_LAST = null;      /* 마지막 토큰 응답 원문 (진단용) */
+
+/* 토큰 발급 방식 후보.
+   문서 표기는 basic-form 이지만 서버 설정에 따라 받는 형태가 다를 수 있어
+   [토큰 진단] 에서 실제로 되는 방식을 찾아 저장합니다. */
+const TOKEN_URL = "/public/auth/v1/oauth2/token";
+function b64key(){ return btoa(`${DIRECT.clientId}:${DIRECT.clientSecret}`); }
+const enc = encodeURIComponent;
+const TOKEN_VARIANTS = [
+  {id:"basic-form", label:"Basic 헤더 + form 본문 (문서 표기)", make:()=>({q:"",
+    headers:{"Authorization":"Basic "+b64key(), "Content-Type":"application/x-www-form-urlencoded"},
+    body:"grant_type=client_credentials"})},
+  {id:"body-form", label:"form 본문에 client_id/client_secret", make:()=>({q:"",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:`grant_type=client_credentials&client_id=${enc(DIRECT.clientId)}&client_secret=${enc(DIRECT.clientSecret)}`})},
+  {id:"basic-query", label:"Basic 헤더 + 쿼리스트링", make:()=>({q:"?grant_type=client_credentials",
+    headers:{"Authorization":"Basic "+b64key()}, body:null})},
+  {id:"json-camel", label:"JSON 본문 (clientId/clientSecret)", make:()=>({q:"",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({grant_type:"client_credentials", clientId:DIRECT.clientId, clientSecret:DIRECT.clientSecret})})},
+  {id:"json-snake", label:"JSON 본문 (client_id/client_secret)", make:()=>({q:"",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({grant_type:"client_credentials", client_id:DIRECT.clientId, client_secret:DIRECT.clientSecret})})}
+];
+function tokenVariant(){
+  const saved = DIRECT && DIRECT.tokenMode;
+  return TOKEN_VARIANTS.find(v=>v.id===saved) || TOKEN_VARIANTS[0];
+}
+function tokenFrom(json){
+  if(!json) return null;
+  return json.access_token || (json.data && json.data.access_token) || null;
+}
+
+/* 후보를 하나씩 실제로 호출해 보고, 받은 응답을 그대로 돌려준다 */
+function probeToken(){
+  const out = [];
+  const step = i => {
+    if(i >= TOKEN_VARIANTS.length) return Promise.resolve(out);
+    const v = TOKEN_VARIANTS[i];
+    const cfg = v.make();
+    return fetch(DAOU_URL + TOKEN_URL + cfg.q, {method:"POST", headers:cfg.headers, body:cfg.body})
+      .then(r=>r.text().then(txt=>({status:r.status, txt})))
+      .then(({status, txt})=>{
+        let j=null; try{ j=JSON.parse(txt); }catch(e){}
+        const tok = tokenFrom(j);
+        out.push({방식:v.label, id:v.id, HTTP:status, 성공:!!tok, 응답:String(txt||"").slice(0,400)});
+        if(tok){
+          /* DIRECT 를 바탕으로 저장해야 파일에 심어 둔 인증키도 함께 남는다 */
+          DB._daou = Object.assign({}, DIRECT, DB._daou, {tokenMode:v.id});
+          saveDB(); resolveDirect();
+          TOKEN = {value:tok, exp: Date.now() + (Number(j.expires_in||86400))*1000};
+          return out;                       /* 되는 방식을 찾으면 멈춘다 */
+        }
+        return step(i+1);
+      })
+      .catch(e=>{
+        out.push({방식:v.label, id:v.id, HTTP:"연결실패", 성공:false, 응답:String(e.message||e).slice(0,300)});
+        return step(i+1);
+      });
+  };
+  return step(0);
+}
 function daouToken(force){
   if(!DIRECT) return Promise.reject(new Error("다우오피스에 연결되어 있지 않습니다."));
   if(!force && TOKEN && TOKEN.exp > Date.now() + 60000) return Promise.resolve(TOKEN.value);
   /* 여러 조회가 동시에 시작해도 토큰은 한 번만 발급받는다 */
   if(!force && TOKEN_INFLIGHT) return TOKEN_INFLIGHT;
-  let basic;
-  try{ basic = btoa(`${DIRECT.clientId}:${DIRECT.clientSecret}`); }
+  try{ b64key(); }
   catch(e){ return Promise.reject(new Error("인증키에 쓸 수 없는 문자가 있습니다.")); }
-  const req = fetch(DAOU_URL + "/public/auth/v1/oauth2/token", {
-    method: "POST",
-    headers: {"Authorization": "Basic " + basic,
-              "Content-Type": "application/x-www-form-urlencoded"},
-    body: "grant_type=client_credentials"
-  }).then(r=>r.json()).then(j=>{
-    if(!j || !j.access_token)
-      throw new Error(`[${(j&&j.code)||"?"}] ${(j&&j.message)||"토큰 발급 실패"} ${(j&&j.messageDetail)||""}`.trim());
-    TOKEN = {value:j.access_token, exp: Date.now() + (Number(j.expires_in)||86400)*1000};
-    return TOKEN.value;
+  const v = tokenVariant();
+  const cfg = v.make();
+  const req = fetch(DAOU_URL + TOKEN_URL + cfg.q, {
+    method: "POST", headers: cfg.headers, body: cfg.body
+  }).then(r=>r.text().then(txt=>({status:r.status, txt})),
+          e=>{ throw new Error("토큰 서버에 연결하지 못했습니다 — " + (e.message||e) +
+                 "\n(브라우저가 api.daouoffice.com 호출을 막았을 수 있습니다)"); })
+   .then(({status, txt})=>{
+    let j = null;
+    try{ j = JSON.parse(txt); }catch(e){}
+    /* 받은 그대로 남겨 둔다 — 데이터 관리의 [토큰 진단]에서 보여 준다 */
+    TOKEN_LAST = {status, txt: String(txt||"").slice(0, 1200)};
+    const tok = tokenFrom(j);
+    if(tok){
+      const exp = Number(j.expires_in || (j.data && j.data.expires_in)) || 86400;
+      TOKEN = {value: tok, exp: Date.now() + exp*1000};
+      return TOKEN.value;
+    }
+    /* 표준 OAuth2 는 error / error_description 으로 답한다 */
+    const code = (j && (j.code || j.error || j.status)) || status || "?";
+    const msg  = (j && (j.message || j.error_description || j.error))
+              || (txt ? String(txt).slice(0,300) : "응답 본문이 비어 있습니다");
+    const det  = (j && (j.messageDetail || j.error_description)) || "";
+    throw new Error(`[${code}] ${msg}${det && det !== msg ? " — " + det : ""}`.trim() +
+                    "\n(데이터 관리 > [토큰 진단] 으로 되는 방식을 찾아볼 수 있습니다)");
   });
   TOKEN_INFLIGHT = req.finally(()=>{ TOKEN_INFLIGHT = null; });
   return TOKEN_INFLIGHT;
@@ -4418,6 +4504,49 @@ const DAOU_EMPTYPE = {PERMANENT:"정규직", TEMPORARY:"계약직", OUTSOURCED:"
                       DISPATCHED:"파견", PART_TIME:"파트", OTHER:"기타"};
 const mlName = o => (o && o.multiLanguageName && o.multiLanguageName.koName) || (o && o.name) || "";
 
+/* 예전(인증키 본문) 방식 — 토큰 방식이 막힌 회사에서도 명부는 계속 들어오게 한다 */
+function fetchEmployeesLegacy(){
+  return Promise.all([
+    daouDirect("/public/v1/account"),
+    daouDirect("/public/v1/dept/member").catch(()=>[])
+  ]).then(([accounts, members])=>{
+    const byLogin = {};
+    (members||[]).forEach(m=>{ if(m && m.loginId) byLogin[m.loginId] = m; });
+    return (accounts||[]).map(a=>{
+      const m = byLogin[a.loginId] || {};
+      return {
+        empNo:    String(a.employeeNumber || m.employeeNumber || ""),
+        name:     a.koName || m.userName || "",
+        dept:     m.orgName || "",
+        position: a.positionName || a.gradeName || m.dutyName || "",
+        type:     "정규직",
+        joinDate: "",
+        email:    a.email || "",
+        phone:    a.mobileNo || a.directTel || "",
+        status:   DAOU_STATUS[String(a.status||"").toUpperCase()] || "재직"
+      };
+    }).filter(r=>r.name);
+  });
+}
+function fetchDeptsLegacy(){
+  return daouDirect("/public/v1/dept").then(list=>{
+    const raw = (list||[]).map(d=>({
+      id:String(d.id != null ? d.id : (d.deptId != null ? d.deptId : "")),
+      parentId:String(d.parentId != null ? d.parentId : (d.parentDeptId != null ? d.parentDeptId : "")),
+      name:d.name || d.deptName || d.orgName || "", code:d.code || d.deptCode || "",
+      order:Number(d.sortOrder || d.order || 0) || 0
+    })).filter(d=>d.name);
+    const byId = {};
+    raw.forEach(d=>{ if(d.id) byId[d.id] = d; });
+    raw.forEach(d=>{
+      const names = [d.name]; let cur = d, depth = 0;
+      while(cur.parentId && byId[cur.parentId] && depth++ < 8){ cur = byId[cur.parentId]; names.unshift(cur.name); }
+      d.path = names.join(" > "); d.depth = names.length - 1;
+    });
+    return raw.sort((a,b)=> a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  });
+}
+
 function fetchEmployeesDirect(){
   return Promise.all([
     daouGet("/public/api/attnd-v3/organization-chart/user/list"),
@@ -4450,6 +4579,10 @@ function fetchEmployeesDirect(){
         status:   u.expiredDate ? "퇴사" : (DAOU_STATUS[String(u.status||"").toUpperCase()] || "재직")
       };
     }).filter(r=>r.name);
+  }).catch(e=>{
+    /* 토큰 방식이 막혀 있으면 예전 방식으로 한 번 더 — 명부가 끊기지 않게 */
+    console.warn("조직도(토큰) 조회 실패, 예전 방식으로 다시 시도합니다.", e);
+    return fetchEmployeesLegacy().then(r=>{ DAOU.legacyOrg = true; return r; });
   });
 }
 
@@ -4478,6 +4611,9 @@ function fetchDeptsDirect(){
     });
     raw.sort((a,b)=> a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
     return raw;
+  }).catch(e=>{
+    console.warn("부서(토큰) 조회 실패, 예전 방식으로 다시 시도합니다.", e);
+    return fetchDeptsLegacy();
   });
 }
 
