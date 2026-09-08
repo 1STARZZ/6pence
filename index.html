@@ -718,6 +718,27 @@ const DEMO_AUTOSEED = true;
    ============================================================ */
 
 const DEPTS = ["경영지원","마케팅","영업","연구개발","생산","디자인","IT"];
+/* 계정과목 — 비용 관리와 같은 기준으로 맞춘다 */
+const ACCOUNTS = ["인건비","임차료","지급수수료","광고선전비","소모품비","통신비",
+                  "복리후생비","여비교통비","접대비","교육훈련비","감가상각비","기타"];
+
+/* "20260801 - 270831" · "2026-08-01 ~ 2027-08-31" 에서 끝 날짜를 읽는다 */
+function termEndOf(term){
+  const t = String(term == null ? "" : term).trim();
+  if(!t) return "";
+  const iso = t.match(/\d{4}[.\-\/]\d{1,2}[.\-\/]\d{1,2}/g);
+  if(iso && iso.length){
+    const d = iso[iso.length-1].split(/[.\-\/]/);
+    return `${d[0]}-${String(d[1]).padStart(2,"0")}-${String(d[2]).padStart(2,"0")}`;
+  }
+  const num = t.match(/\d{6,8}/g);
+  if(num && num.length){
+    const d = num[num.length-1];
+    if(d.length === 8) return `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+    if(d.length === 6) return `20${d.slice(0,2)}-${d.slice(2,4)}-${d.slice(4,6)}`;
+  }
+  return "";
+}
 const POSITIONS = ["사원","주임","대리","과장","차장","부장","이사","대표"];
 
 /* ------------------------------------------------------------
@@ -1009,6 +1030,25 @@ const COLLECTIONS = {
       {k:"status",l:"발행상태",t:"select",o:["발행","미발행","취소발행"],badge:1,req:1}
     ]
   },
+  fixedcost:{
+    title:"정기지출 · 고정비", desc:"매달 나가는 고정비와 정기결제를 한 곳에서 봅니다. 세금계산서로 받는 건과 법인카드로 결제하는 건을 함께 관리합니다.",
+    primary:"item", stat:"nature", chart:"fixedcost",
+    fields:[
+      {k:"item",l:"항목",t:"text"},
+      {k:"kind",l:"구분",t:"select",o:["세금계산서","법카","이체","기타"],badge:1,req:1},
+      {k:"nature",l:"고정비/실사용액",t:"select",o:["고정비","실사용액"],badge:1,req:1},
+      {k:"category",l:"계정과목",t:"select",o:ACCOUNTS},
+      {k:"amount",l:"금액",t:"money",req:1},
+      {k:"cycle",l:"정기결제유무",t:"select",o:["Y","N"],badge:1},
+      {k:"owner",l:"담당자",t:"person"},
+      {k:"vendor",l:"거래처",t:"text"},
+      {k:"invoiceDay",l:"세금계산서 발행일",t:"text",hint:"예: 익월 5일까지"},
+      {k:"payDay",l:"입금일/결제일",t:"text",hint:"예: 익월 10일까지 · 말일"},
+      {k:"term",l:"계약기간",t:"text",hint:"예: 20260801 - 270831"},
+      {k:"termEnd",l:"계약 만료일",t:"date",calc:r=>termEndOf(r.term),hint:"계약기간에서 자동으로 읽습니다"},
+      {k:"note",l:"비고",t:"textarea",hide:1}
+    ]
+  },
   vendor:{
     title:"거래처 관리", desc:"거래처 기본정보와 결제 조건입니다.",
     primary:"name", stat:"kind",
@@ -1274,6 +1314,7 @@ const MENU = [
     {id:"cost",label:"비용 관리"},{id:"pnl",label:"월별 손익"},
     {id:"closing",label:"월 마감"},
     {id:"cash",label:"자금현황"},{id:"invoice",label:"세금계산서"},
+    {id:"fixedcost",label:"정기지출·고정비"},
     {id:"vendor",label:"거래처 관리"}
   ]},
   {type:"group", id:"ga", icon:"box", label:"총무 General Affairs", items:[
@@ -1324,6 +1365,7 @@ const DEFAULTS = {
   pnl:{month:"@month"},
   cash:{date:"@today", source:"수기"},
   invoice:{issueDate:"@today", kind:"매출", status:"미발행"},
+  fixedcost:{kind:"세금계산서", nature:"고정비", cycle:"Y"},
   assets:{assetNo:autoNo("assets","assetNo","AST-",4), buyDate:"@today", status:"사용중"},
   contracts:{startDate:"@today", status:"검토"},
   office:{lastDate:"@today", cycle:"월", status:"예정"},
@@ -2346,9 +2388,44 @@ function listData(id){
   return data;
 }
 
+/* 정기지출 집계 — 고정비만 월 합계로 본다 */
+function fixedCostStats(){
+  const all = rows("fixedcost");
+  const fixed = all.filter(r=>r.nature === "고정비");
+  const sum = list => list.reduce((n,r)=>n+(Number(r.amount)||0), 0);
+  const byKind = {};
+  all.forEach(r=>{ const k = r.kind || "기타"; byKind[k] = (byKind[k]||0) + (Number(r.amount)||0); });
+  const byAcct = {};
+  all.forEach(r=>{ const k = r.category || "미지정"; byAcct[k] = (byAcct[k]||0) + (Number(r.amount)||0); });
+  const expiring = all.filter(r=>{ const d = dayDiff(r.termEnd); return d !== null && d >= 0 && d <= 60; });
+  return {
+    all, fixed, monthly: sum(fixed), total: sum(all),
+    yearly: sum(fixed) * 12,
+    recurring: all.filter(r=>r.cycle === "Y").length,
+    byKind, byAcct, expiring
+  };
+}
+
 function summaryCards(id, data){
   const col = COLLECTIONS[id];
   const cards = [];
+  if(id === "fixedcost"){
+    const f = fixedCostStats();
+    return `<div class="stat-grid compact">
+      <div class="stat accent"><div class="stat-label">월 고정비</div>
+        <div class="stat-value">${wonShort(f.monthly)}<span class="unit">원</span></div></div>
+      <div class="stat"><div class="stat-label">연 환산</div>
+        <div class="stat-value">${wonShort(f.yearly)}<span class="unit">원</span></div></div>
+      <div class="stat"><div class="stat-label">세금계산서</div>
+        <div class="stat-value">${wonShort(f.byKind["세금계산서"]||0)}<span class="unit">원</span></div></div>
+      <div class="stat"><div class="stat-label">법인카드</div>
+        <div class="stat-value">${wonShort(f.byKind["법카"]||0)}<span class="unit">원</span></div></div>
+      <div class="stat"><div class="stat-label">정기결제</div>
+        <div class="stat-value">${f.recurring}<span class="unit">건</span></div></div>
+      <div class="stat"><div class="stat-label">60일 내 계약만료</div>
+        <div class="stat-value">${f.expiring.length}<span class="unit">건</span></div></div>
+    </div>`;
+  }
   cards.push({l:"전체", v:rows(id).length + "건", accent:true});
   const opts = filterOptions(col);
   if(opts){
@@ -2372,6 +2449,45 @@ function summaryCards(id, data){
       <div class="stat-label">${esc(c.l)}</div>
       <div class="stat-value">${esc(c.v)}</div>
     </div>`).join("")}</div>`;
+}
+
+/* 계정과목별 · 구분별 정기지출 내역 */
+function fixedCostBreakdown(){
+  const f = fixedCostStats();
+  if(!f.all.length) return "";
+  const rowsOut = Object.entries(f.byAcct).sort((a,b)=>b[1]-a[1]);
+  const max = rowsOut.length ? rowsOut[0][1] : 0;
+  const KIND_COLOR = {"세금계산서":"var(--info)", "법카":"var(--coral)", "이체":"var(--ok)", "기타":"var(--neutral)"};
+  return `
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-head">
+      <div class="card-title">계정과목별 정기지출
+        <span class="sub">전체 ${wonShort(f.total)}원 · 고정비 ${wonShort(f.monthly)}원</span></div>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px">
+        ${Object.entries(f.byKind).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`
+          <div style="display:flex;align-items:center;gap:7px;font-size:13px">
+            <span style="width:9px;height:9px;border-radius:3px;background:${KIND_COLOR[k]||"var(--neutral)"}"></span>
+            <span>${esc(k)}</span>
+            <b class="num" style="font-weight:700">${wonShort(v)}원</b>
+          </div>`).join("")}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:9px">
+        ${rowsOut.map(([acct, amt])=>`
+          <div style="display:grid;grid-template-columns:120px 1fr 92px;align-items:center;gap:12px">
+            <span style="font-size:13px;color:var(--ink-2)">${esc(acct)}</span>
+            <span style="height:9px;background:var(--line);border-radius:6px;overflow:hidden">
+              <span style="display:block;height:100%;width:${max ? Math.max(2, Math.round(amt/max*100)) : 0}%;background:var(--coral);border-radius:6px"></span>
+            </span>
+            <span class="num" style="text-align:right;font-size:13px;font-weight:600">${wonShort(amt)}원</span>
+          </div>`).join("")}
+      </div>
+      ${f.expiring.length ? `<div class="note" style="margin-top:18px">${icon("alert","ic-sm")}
+        <div><b>60일 안에 계약이 끝나는 항목 ${f.expiring.length}건</b> —
+        ${f.expiring.slice(0,4).map(r=>`${esc(r.item)} (${esc(r.termEnd)})`).join(", ")}${f.expiring.length>4?" 외":""}</div></div>` : ""}
+    </div>
+  </div>`;
 }
 
 function renderList(){
@@ -2402,7 +2518,7 @@ function renderList(){
       </div>
     </div>
     ${summaryCards(id, data)}
-    ${col.chart==="pnl" ? pnlChart() : ""}
+    ${col.chart==="pnl" ? pnlChart() : col.chart==="fixedcost" ? fixedCostBreakdown() : ""}
     <div id="bulk-slot">${bulkBar(col, sel, statField)}</div>
     <div class="toolbar">
       <div class="field">
@@ -3295,6 +3411,7 @@ function viewDashboard(){
       <div class="hero-kpi"><b>${active.length}</b><span>재직 인원</span></div>
       <div class="hero-kpi"><b>${wonShort(pnlLast.revenue||0)}</b><span>${esc(pnlLast.month||"")} 매출</span></div>
       <div class="hero-kpi"><b>${wonShort(rows("cash").reduce((s,r)=>s+(Number(r.balance)||0),0))}</b><span>총 보유 자금</span></div>
+      <div class="hero-kpi"><b>${wonShort(fixedCostStats().monthly)}</b><span>월 고정비</span></div>
     </div>
   </div>
 
