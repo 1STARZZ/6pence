@@ -719,8 +719,70 @@ const DEMO_AUTOSEED = true;
 
 const DEPTS = ["경영지원","마케팅","영업","연구개발","생산","디자인","IT"];
 /* 계정과목 — 비용 관리와 같은 기준으로 맞춘다 */
-const ACCOUNTS = ["인건비","임차료","지급수수료","광고선전비","소모품비","통신비",
+const ACCOUNTS = ["인건비","임차료","지급수수료","광고선전비","소모품비","통신비","법인폰",
                   "복리후생비","여비교통비","접대비","교육훈련비","감가상각비","기타"];
+
+/* 입출금 분류 — 계정과목에 은행 거래에서만 나오는 항목을 더한 목록 */
+const TX_ACCOUNTS = ["매출입금","인건비","4대보험","세금","법인카드","임차료","지급수수료",
+                     "통신비","법인폰","소모품비","광고선전비","여비교통비","복리후생비","접대비",
+                     "금융","내부이체","기타"];
+
+/* 결제 방식 — 자동이체인지 카드인지 손으로 보낸 돈인지 */
+const PAY_METHODS = ["자동이체","카드","급여이체","계좌이체","기타"];
+const PAY_RULES = [
+  [/자동이체|자동납부|CMS|지로|출금이체|납부$|납부\d*$/, "자동이체"],
+  [/카드선결제|BC카드|신한카드|삼성카드|현대카드|법인카드/,   "카드"],
+  [/급여|상여|퇴직금/,                                  "급여이체"]
+];
+function payMethodOf(desc, memo, category){
+  const t = `${desc||""} ${memo||""}`;
+  for(const [re, m] of PAY_RULES) if(re.test(t)) return m;
+  /* 보험료·공과금·세금은 대개 자동이체로 빠진다 */
+  if(category === "4대보험" || category === "세금") return "자동이체";
+  if(category === "법인카드") return "카드";
+  if(category === "인건비")   return "급여이체";
+  return "계좌이체";
+}
+
+/* 적요를 보고 분류를 정하는 규칙 — 위에서부터 먼저 걸리는 것을 쓴다 */
+const TX_RULES = [
+  [/내부이체/,                                   "내부이체"],
+  [/카드선결제|BC카드|법인카드|신한카드|삼성카드/,   "법인카드"],
+  [/국민연금|국민건강|건강보험|고용보험|산재|통합징수/, "4대보험"],
+  [/국세|지방세|부가세|원천세|법인세|세금(?!계산서)/, "세금"],
+  [/급여|상여|퇴직금/,                            "인건비"],
+  [/페이먼|정산|매출|PG|결제대행/,                 "매출입금"],
+  [/세무법인|회계법인|법무|변호사|법무사|합동법무/,   "지급수수료"],
+  [/수수료|인증/,                                "지급수수료"],
+  [/임차|관리비|월세|보증금|캐슬|오피스텔/,         "임차료"],
+  [/오피스넷|인터넷|전용회선|호스팅|도메인|가비아|서버|다우기술|카페24\(주\)/, "통신비"],
+  [/법인폰|휴대폰|모바일|알뜰폰|SKT|SK텔레콤|KT\b|LG유플러스|엘지유플러스|유플러스|LGU/, "법인폰"],
+  [/SK브로드|텔레콤|통신/,                              "통신비"],
+  [/컴퓨존|퍼시스|데스커|비품|문구|사무용품/,       "소모품비"],
+  [/예금|적금|이자|결산|대출|펀드|투자/,           "금융"]
+];
+
+function txCategoryOf(desc, memo){
+  const t = `${desc||""} ${memo||""}`;
+  for(const [re, cat] of TX_RULES) if(re.test(t)) return cat;
+  return "";
+}
+
+/* "2026.09.07 20:18:35" → "2026-09-07" */
+function txDate(at){
+  const m = String(at == null ? "" : at).match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
+  return m ? `${m[1]}-${String(m[2]).padStart(2,"0")}-${String(m[3]).padStart(2,"0")}` : "";
+}
+
+/* 거래처 이름 맞추기용 정규화 — (주)·주식회사·괄호·공백·전각문자 제거 */
+function normName(v){
+  return String(v == null ? "" : v)
+    .replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))  /* 전각 → 반각 */
+    .replace(/\u3000/g, " ")
+    .replace(/\(주\)|\(유\)|주식회사|유한회사|㈜/g, "")
+    .replace(/[\s\-_.,()]/g, "")
+    .toLowerCase();
+}
 
 /* "20260801 - 270831" · "2026-08-01 ~ 2027-08-31" 에서 끝 날짜를 읽는다 */
 function termEndOf(term){
@@ -1027,7 +1089,28 @@ const COLLECTIONS = {
       {k:"supply",l:"공급가액",t:"money",req:1},
       {k:"vat",l:"세액",t:"money",calc:r=>has(r.supply)?Math.round(N(r.supply)*VAT):"" ,hint:"공급가액의 10%"},
       {k:"total",l:"합계",t:"money",calc:r=>has(r.supply)?N(r.supply)+Math.round(N(r.supply)*VAT):"" ,hint:"공급가액 + 세액"},
-      {k:"status",l:"발행상태",t:"select",o:["발행","미발행","취소발행"],badge:1,req:1}
+      {k:"status",l:"발행상태",t:"select",o:["발행","미발행","취소발행"],badge:1,req:1},
+      {k:"paidDate",l:"출금일",t:"date",hint:"입출금 내역과 매칭하면 채워집니다"},
+      {k:"paidAmount",l:"출금액",t:"money"},
+      {k:"txRef",l:"매칭 적요",t:"text",hide:1}
+    ]
+  },
+  banktx:{
+    title:"입출금 내역", desc:"은행에서 받은 거래내역입니다. 적요를 보고 계정을 자동으로 채우고, 계좌끼리 옮긴 돈은 따로 표시합니다.",
+    primary:"desc", stat:"kind",
+    fields:[
+      {k:"at",l:"일시",t:"text",req:1},
+      {k:"date",l:"거래일",t:"date",calc:r=>txDate(r.at),hide:1},
+      {k:"kind",l:"구분",t:"select",o:["입금","출금"],badge:1,req:1},
+      {k:"account",l:"계좌",t:"text"},
+      {k:"amount",l:"금액",t:"money",req:1},
+      {k:"balance",l:"잔액",t:"money"},
+      {k:"desc",l:"적요",t:"text"},
+      {k:"category",l:"분류",t:"select",o:TX_ACCOUNTS},
+      {k:"pay",l:"결제방식",t:"select",o:PAY_METHODS,badge:1},
+      {k:"party",l:"거래처",t:"text"},
+      {k:"memo",l:"메모",t:"text"},
+      {k:"matchRef",l:"연결된 증빙",t:"text",hide:1}
     ]
   },
   fixedcost:{
@@ -1035,7 +1118,7 @@ const COLLECTIONS = {
     primary:"item", stat:"nature", chart:"fixedcost",
     fields:[
       {k:"item",l:"항목",t:"text"},
-      {k:"kind",l:"구분",t:"select",o:["세금계산서","법카","이체","기타"],badge:1,req:1},
+      {k:"kind",l:"구분",t:"select",o:["세금계산서","법카","자동이체","이체","기타"],badge:1,req:1},
       {k:"nature",l:"고정비/실사용액",t:"select",o:["고정비","실사용액"],badge:1,req:1},
       {k:"category",l:"계정과목",t:"select",o:ACCOUNTS},
       {k:"amount",l:"금액",t:"money",req:1},
@@ -1309,10 +1392,12 @@ const MENU = [
     {id:"benefits",label:"복리후생"},{id:"education",label:"교육"}
   ]},
   {type:"group", id:"fin", icon:"wallet", label:"재무 Finance", items:[
+    {id:"findash",label:"재무 대시보드"},
     {id:"expense",label:"지출결의"},{id:"corpcard",label:"법인카드"},
     {id:"tax",label:"세금/부가세"},{id:"revenue",label:"매출/입금"},
     {id:"cost",label:"비용 관리"},{id:"pnl",label:"월별 손익"},
     {id:"closing",label:"월 마감"},
+    {id:"banktx",label:"입출금 내역"},
     {id:"cash",label:"자금현황"},{id:"invoice",label:"세금계산서"},
     {id:"fixedcost",label:"정기지출·고정비"},
     {id:"vendor",label:"거래처 관리"}
@@ -1366,6 +1451,7 @@ const DEFAULTS = {
   cash:{date:"@today", source:"수기"},
   invoice:{issueDate:"@today", kind:"매출", status:"미발행"},
   fixedcost:{kind:"세금계산서", nature:"고정비", cycle:"Y"},
+  banktx:{kind:"출금"},
   assets:{assetNo:autoNo("assets","assetNo","AST-",4), buyDate:"@today", status:"사용중"},
   contracts:{startDate:"@today", status:"검토"},
   office:{lastDate:"@today", cycle:"월", status:"예정"},
@@ -2345,6 +2431,7 @@ function route(){
   const el = document.getElementById("content");
   if(id==="dashboard"){ renderTop("경영지원 Dashboard"); el.innerHTML = viewDashboard(); bindDashboard(); }
   else if(id==="closing"){ renderTop("월 마감"); renderClosing(); }
+  else if(id==="findash"){ renderTop("재무 대시보드"); el.innerHTML = viewFinance(); }
   else if(id==="data"){ renderTop("데이터 관리"); renderData(); }
   else if(id==="brief"){ renderTop("경영 브리핑"); el.innerHTML = viewBrief(); }
   else if(DOCS[id]){ renderTop(DOCS[id].title); el.innerHTML = viewDoc(id); bindDoc(id); }
@@ -2388,6 +2475,327 @@ function listData(id){
   return data;
 }
 
+/* ============================================================
+   입출금 내역 — 자동 분류 · 내부이체 · 집계
+   ============================================================ */
+
+/* 같은 시각에 같은 금액이 한 계좌에서 빠지고 다른 계좌로 들어오면
+   회사 안에서 옮긴 돈이다. 매출·비용에서 빼야 숫자가 맞는다. */
+function markInnerTransfers(){
+  const all = rows("banktx");
+  const byKey = {};
+  all.forEach(r=>{
+    const k = `${r.at}|${Math.abs(Number(r.amount)||0)}`;
+    (byKey[k] = byKey[k] || []).push(r);
+  });
+  let n = 0;
+  Object.values(byKey).forEach(g=>{
+    if(g.length < 2) return;
+    const hasIn  = g.some(r=>r.kind === "입금");
+    const hasOut = g.some(r=>r.kind === "출금");
+    if(!hasIn || !hasOut) return;
+    g.forEach(r=>{ if(r.category !== "내부이체"){ r.category = "내부이체"; n++; } });
+  });
+  return n;
+}
+
+/* 적요를 보고 비어 있는 분류만 채운다 (이미 넣은 값은 건드리지 않음) */
+function autoCategorize(){
+  let n = 0, m = 0;
+  rows("banktx").forEach(r=>{
+    if(!r.category){
+      const c = txCategoryOf(r.desc, r.memo);
+      if(c){ r.category = c; n++; }
+    }
+    if(!r.pay && r.kind === "출금"){
+      r.pay = payMethodOf(r.desc, r.memo, r.category);
+      m++;
+    }
+  });
+  return {cat:n, pay:m};
+}
+
+function bankStats(list){
+  const src = list || rows("banktx");
+  const real = src.filter(r=>r.category !== "내부이체");
+  const sum = (arr, kind) => arr.filter(r=>r.kind===kind)
+                                .reduce((n,r)=>n+Math.abs(Number(r.amount)||0), 0);
+  const inn  = sum(real, "입금");
+  const out  = sum(real, "출금");
+  const byCat = {};
+  real.filter(r=>r.kind==="출금").forEach(r=>{
+    const k = r.category || "미분류";
+    byCat[k] = (byCat[k]||0) + Math.abs(Number(r.amount)||0);
+  });
+  /* 계좌별 최신 잔액 — 일시가 가장 나중인 행의 잔액 */
+  const byAcct = {};
+  src.forEach(r=>{
+    const a = r.account || "미지정";
+    if(!byAcct[a] || String(r.at) > String(byAcct[a].at)) byAcct[a] = r;
+  });
+  return {
+    all: src, real, inflow: inn, outflow: out, net: inn - out,
+    inner: src.length - real.length,
+    unset: src.filter(r=>!r.category).length,
+    byCat, byAcct
+  };
+}
+
+/* ============================================================
+   세금계산서 ↔ 출금 매칭
+   금액이 맞는지, 거래처 이름이 적요에 있는지, 날짜가 가까운지로 점수를 낸다.
+   적요는 은행에서 잘려 오는 경우가 많아 앞부분만 맞아도 인정한다.
+   ============================================================ */
+function matchScore(inv, tx){
+  const want = Number(inv.total) || (Number(inv.supply)||0) + (Number(inv.vat)||0);
+  const got  = Math.abs(Number(tx.amount)||0);
+  if(!want || !got) return 0;
+
+  let score = 0;
+  if(want === got) score += 100;
+  else if(Math.abs(want-got) <= Math.max(10, want*0.01)) score += 55;   /* 1% 안쪽 오차 */
+  else return 0;                                                        /* 금액이 다르면 후보 아님 */
+
+  const a = normName(inv.client), b = normName(tx.desc);
+  if(a && b){
+    if(a === b) score += 60;
+    else if(b.indexOf(a) >= 0 || a.indexOf(b) >= 0) score += 45;        /* 적요가 잘린 경우 */
+    else if(a.slice(0,3) && b.indexOf(a.slice(0,3)) >= 0) score += 20;
+  }
+  const d = Math.abs(dayDiff(tx.date || txDate(tx.at)) - dayDiff(inv.issueDate));
+  if(!isNaN(d)){
+    if(d <= 10) score += 25;
+    else if(d <= 45) score += 15;
+    else if(d <= 90) score += 5;
+    else score -= 20;
+  }
+  return score;
+}
+
+/* 매입 세금계산서마다 가장 잘 맞는 출금을 찾는다 */
+function matchInvoices(){
+  const invs = rows("invoice").filter(r=>r.kind === "매입" && !r.paidDate);
+  const txs  = rows("banktx").filter(r=>r.kind === "출금" && r.category !== "내부이체" && !r.matchRef);
+  const used = new Set();
+  const out  = [];
+  invs.forEach(inv=>{
+    const cands = txs.filter(t=>!used.has(t._id))
+      .map(t=>({tx:t, score:matchScore(inv, t)}))
+      .filter(x=>x.score > 0)
+      .sort((a,b)=>b.score - a.score);
+    if(!cands.length){ out.push({inv, best:null, cands:[], auto:false}); return; }
+    const best = cands[0];
+    /* 1등이 확실히 앞서고 점수가 충분할 때만 자동으로 짝지어 둔다 */
+    const auto = best.score >= 145 && (cands.length === 1 || best.score - cands[1].score >= 30);
+    if(auto) used.add(best.tx._id);
+    out.push({inv, best, cands:cands.slice(0,3), auto});
+  });
+  return out;
+}
+
+function applyMatch(inv, tx){
+  inv.paidDate   = tx.date || txDate(tx.at);
+  inv.paidAmount = Math.abs(Number(tx.amount)||0);
+  inv.txRef      = tx.desc || "";
+  tx.matchRef = `세금계산서 ${inv.client||""} ${won(inv.total)}원`.trim();
+  if(!tx.party) tx.party = inv.client || "";
+}
+
+/* 출금에서 되풀이되는 항목을 찾아 고정비 후보로 올린다.
+   같은 상대에게 같은 금액이 두 번 이상 → 고정비
+   같은 상대에게 세 달 이상 (금액은 달라도) → 정기(실사용액) */
+function findRecurring(){
+  const out = rows("banktx").filter(r=>r.kind === "출금" && r.category !== "내부이체");
+  const byAmt = {}, byName = {};
+  out.forEach(r=>{
+    const nm = normName(r.desc);
+    if(!nm) return;
+    const amt = Math.abs(Number(r.amount)||0);
+    const day = r.date || txDate(r.at);
+    (byAmt[`${nm}|${amt}`] = byAmt[`${nm}|${amt}`] || []).push({r, day, amt});
+    (byName[nm] = byName[nm] || []).push({r, day, amt});
+  });
+
+  const found = [];
+  const taken = new Set();
+  Object.values(byAmt).forEach(g=>{
+    const days = [...new Set(g.map(x=>x.day))];
+    if(days.length < 2) return;
+    taken.add(normName(g[0].r.desc));
+    found.push({
+      desc: g[0].r.desc, amount: g[0].amt, times: g.length, days,
+      months: [...new Set(days.map(d=>d.slice(0,7)))],
+      category: g[0].r.category || txCategoryOf(g[0].r.desc),
+      pay: g[0].r.pay || payMethodOf(g[0].r.desc, g[0].r.memo, g[0].r.category),
+      nature: "고정비"
+    });
+  });
+  Object.entries(byName).forEach(([nm, g])=>{
+    if(taken.has(nm)) return;
+    const months = [...new Set(g.map(x=>x.day.slice(0,7)))].filter(Boolean);
+    if(months.length < 3) return;
+    const avg = Math.round(g.reduce((n,x)=>n+x.amt,0)/g.length);
+    found.push({
+      desc: g[0].r.desc, amount: avg, times: g.length,
+      days: [...new Set(g.map(x=>x.day))], months,
+      category: g[0].r.category || txCategoryOf(g[0].r.desc),
+      pay: g[0].r.pay || payMethodOf(g[0].r.desc, g[0].r.memo, g[0].r.category),
+      nature: "실사용액"
+    });
+  });
+  return found.sort((a,b)=>b.amount - a.amount);
+}
+
+/* ------------------------------------------------------------
+   화면별 도구 실행
+   ------------------------------------------------------------ */
+function extraAction(act){
+  if(act === "txauto"){
+    if(!rows("banktx").length){ alert("먼저 입출금 내역을 등록하세요."); return; }
+    const inner = markInnerTransfers();
+    const auto  = autoCategorize();
+    commit("banktx"); renderList();
+    toast(`분류 ${auto.cat}건 · 결제방식 ${auto.pay}건 채움 · 내부이체 ${inner}건`);
+    return;
+  }
+  if(act === "txfixed") return openRecurringModal();
+  if(act === "txmatch") return openMatchModal();
+}
+
+/* ---- 정기지출 찾기 ---- */
+function openRecurringModal(){
+  const found = findRecurring();
+  modalEl = document.createElement("div");
+  modalEl.className = "overlay";
+  modalEl.innerHTML = `<div class="modal wide">
+    <div class="modal-head"><div><h3>정기지출 찾기</h3>
+      <div class="sub">출금 내역에서 되풀이되는 항목을 골랐습니다. 넣을 것만 고르세요.</div></div></div>
+    <div class="modal-body">
+      ${found.length ? `
+      <div class="note" style="margin-bottom:14px">${icon("info","ic-sm")}
+        <div>같은 곳에 <b>같은 금액이 2번 이상</b> 나갔으면 고정비로, <b>3개월 이상 이어졌지만 금액이 다르면</b>
+        실사용액으로 봤습니다. 회사 계좌끼리 옮긴 돈은 뺐습니다.</div></div>
+      <div style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:var(--radius-sm)">
+        ${found.map((f,i)=>`
+        <label class="list-row" style="padding:10px 14px;cursor:pointer">
+          <input type="checkbox" data-rec="${i}" checked>
+          <div class="list-main" style="margin-left:10px">
+            <div class="t">${esc(f.desc)}
+              <span class="badge ${f.nature==="고정비"?"ok":"info"}" style="margin-left:6px">${esc(f.nature)}</span>
+              ${f.category?`<span class="badge" style="margin-left:4px">${esc(f.category)}</span>`:""}
+              ${f.pay?`<span class="badge" style="margin-left:4px">${esc(f.pay)}</span>`:""}</div>
+            <div class="s">${f.times}회 · ${esc(f.months.join(", "))} · ${esc(f.days.slice(0,3).join(" · "))}${f.days.length>3?" 외":""}</div>
+          </div>
+          <b class="num" style="font-weight:700">${won(f.amount)}원</b>
+        </label>`).join("")}
+      </div>`
+      : `<div class="empty" style="padding:36px">${icon("inbox","ic-lg")}
+          <div style="margin-top:10px">되풀이되는 출금을 찾지 못했습니다.</div>
+          <span style="font-size:12px">두 달 이상 데이터가 있어야 판단할 수 있습니다.</span></div>`}
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="rec-count" style="margin-right:auto"></span>
+      <button class="btn" id="rec-cancel">닫기</button>
+      ${found.length?`<button class="btn btn-primary" id="rec-add">정기지출로 등록</button>`:""}
+    </div></div>`;
+  document.body.appendChild(modalEl);
+  document.body.style.overflow = "hidden";
+  modalEl.onclick = e => { if(e.target===modalEl) closeModal(); };
+  modalEl.querySelector("#rec-cancel").onclick = closeModal;
+
+  const upd = ()=>{
+    const n = modalEl.querySelectorAll("[data-rec]:checked").length;
+    const sum = [...modalEl.querySelectorAll("[data-rec]:checked")]
+      .reduce((t,b)=>t + found[+b.dataset.rec].amount, 0);
+    modalEl.querySelector("#rec-count").textContent = `${n}건 선택 · 월 ${won(sum)}원`;
+  };
+  modalEl.querySelectorAll("[data-rec]").forEach(b=>b.onchange = upd);
+  upd();
+
+  const addBtn = modalEl.querySelector("#rec-add");
+  if(addBtn) addBtn.onclick = ()=>{
+    const picked = [...modalEl.querySelectorAll("[data-rec]:checked")].map(b=>found[+b.dataset.rec]);
+    if(!picked.length){ alert("등록할 항목을 고르세요."); return; }
+    let added = 0;
+    picked.forEach(f=>{
+      const dup = rows("fixedcost").some(r=>normName(r.item) === normName(f.desc)
+                                         && Number(r.amount) === f.amount);
+      if(dup) return;
+      DB.fixedcost.push(Object.assign({_id:uid()}, defaultsFor("fixedcost", 0), {
+        item: f.desc,
+        kind: f.pay === "카드" || f.category === "법인카드" ? "법카"
+            : f.pay === "자동이체" ? "자동이체" : "이체",
+        nature: f.nature, category: f.category === "법인카드" ? "" : f.category,
+        amount: f.amount, cycle: "Y",
+        note: `입출금 내역에서 찾음 · ${f.times}회 (${f.months.join(", ")})`
+      }));
+      added++;
+    });
+    commit("fixedcost"); closeModal(); renderNav();
+    toast(added ? `정기지출 ${added}건을 등록했습니다.` : "이미 등록된 항목입니다.");
+    location.hash = "#/fixedcost";
+  };
+}
+
+/* ---- 세금계산서 ↔ 출금 매칭 ---- */
+function openMatchModal(){
+  const res = matchInvoices();
+  const hit = res.filter(r=>r.best);
+  const miss = res.filter(r=>!r.best);
+  modalEl = document.createElement("div");
+  modalEl.className = "overlay";
+  modalEl.innerHTML = `<div class="modal wide">
+    <div class="modal-head"><div><h3>세금계산서 · 출금 매칭</h3>
+      <div class="sub">매입 세금계산서와 실제 나간 돈을 금액·거래처·날짜로 맞춰 봤습니다</div></div></div>
+    <div class="modal-body">
+      ${!rows("banktx").length ? `<div class="note" style="background:var(--warn-bg)">${icon("alert","ic-sm")}
+        <div>먼저 <b>입출금 내역</b>을 등록해 주세요. 매칭할 출금 기록이 없습니다.</div></div>` : ""}
+      ${hit.length ? `
+      <div style="max-height:330px;overflow:auto;border:1px solid var(--line);border-radius:var(--radius-sm)">
+        ${hit.map((h,i)=>`
+        <label class="list-row" style="padding:10px 14px;cursor:pointer">
+          <input type="checkbox" data-mt="${i}" ${h.auto?"checked":""}>
+          <div class="list-main" style="margin-left:10px">
+            <div class="t">${esc(h.inv.client||"(거래처 없음)")} · ${won(h.inv.total)}원
+              <span class="badge ${h.auto?"ok":"warn"}" style="margin-left:6px">${h.auto?"확실":"확인 필요"}</span></div>
+            <div class="s">${esc(h.inv.issueDate||"")} 세금계산서
+              &nbsp;→&nbsp; ${esc(h.best.tx.date || txDate(h.best.tx.at))} 출금
+              <b>${won(Math.abs(h.best.tx.amount))}원</b> · ${esc(h.best.tx.desc||"")}</div>
+          </div>
+          <span class="muted num" style="font-size:12px">${h.best.score}점</span>
+        </label>`).join("")}
+      </div>` : (rows("banktx").length ? `<div class="empty" style="padding:30px">${icon("inbox","ic-lg")}
+          <div style="margin-top:10px">맞는 출금을 찾지 못했습니다.</div>
+          <span style="font-size:12px">금액이 정확히 맞는 출금이 있어야 후보로 올라갑니다.</span></div>` : "")}
+      ${miss.length ? `<div class="note" style="margin-top:14px">${icon("info","ic-sm")}
+        <div>짝을 못 찾은 매입 세금계산서 <b>${miss.length}건</b> —
+        ${miss.slice(0,4).map(m=>esc(m.inv.client||"(거래처 없음)")).join(", ")}${miss.length>4?" 외":""}</div></div>` : ""}
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="mt-count" style="margin-right:auto"></span>
+      <button class="btn" id="mt-cancel">닫기</button>
+      ${hit.length?`<button class="btn btn-primary" id="mt-apply">선택한 건 확정</button>`:""}
+    </div></div>`;
+  document.body.appendChild(modalEl);
+  document.body.style.overflow = "hidden";
+  modalEl.onclick = e => { if(e.target===modalEl) closeModal(); };
+  modalEl.querySelector("#mt-cancel").onclick = closeModal;
+
+  const upd = ()=>{ modalEl.querySelector("#mt-count").textContent =
+    `${modalEl.querySelectorAll("[data-mt]:checked").length}건 선택`; };
+  modalEl.querySelectorAll("[data-mt]").forEach(b=>b.onchange = upd);
+  upd();
+
+  const ap = modalEl.querySelector("#mt-apply");
+  if(ap) ap.onclick = ()=>{
+    const picked = [...modalEl.querySelectorAll("[data-mt]:checked")].map(b=>hit[+b.dataset.mt]);
+    if(!picked.length){ alert("확정할 건을 고르세요."); return; }
+    picked.forEach(h=>applyMatch(h.inv, h.best.tx));
+    commit("invoice"); commit("banktx"); closeModal(); route();
+    toast(`${picked.length}건을 출금과 연결했습니다.`);
+  };
+}
+
 /* 정기지출 집계 — 고정비만 월 합계로 본다 */
 function fixedCostStats(){
   const all = rows("fixedcost");
@@ -2409,6 +2817,21 @@ function fixedCostStats(){
 function summaryCards(id, data){
   const col = COLLECTIONS[id];
   const cards = [];
+  if(id === "banktx"){
+    const b = bankStats(data);
+    return `<div class="stat-grid compact">
+      <div class="stat accent"><div class="stat-label">입금 (현재 목록)</div>
+        <div class="stat-value">${wonShort(b.inflow)}<span class="unit">원</span></div></div>
+      <div class="stat"><div class="stat-label">출금</div>
+        <div class="stat-value">${wonShort(b.outflow)}<span class="unit">원</span></div></div>
+      <div class="stat"><div class="stat-label">순증감</div>
+        <div class="stat-value" style="color:${b.net>=0?"var(--ok)":"var(--danger)"}">${b.net>=0?"+":"−"}${wonShort(Math.abs(b.net))}<span class="unit">원</span></div></div>
+      <div class="stat"><div class="stat-label">내부이체 (제외됨)</div>
+        <div class="stat-value">${b.inner}<span class="unit">건</span></div></div>
+      <div class="stat"><div class="stat-label">분류 미지정</div>
+        <div class="stat-value">${b.unset}<span class="unit">건</span></div></div>
+    </div>`;
+  }
   if(id === "fixedcost"){
     const f = fixedCostStats();
     return `<div class="stat-grid compact">
@@ -2511,6 +2934,7 @@ function renderList(){
         <div class="page-desc">${esc(col.desc)}</div>
       </div>
       <div class="page-head-actions">
+        ${extraActionBtn(id)}
         ${DAOU.configured ? daouActionBtn(id) : ""}
         <button class="btn btn-sm" id="btn-import">${icon("upload","ic-sm")} 일괄 등록</button>
         <button class="btn btn-sm" id="btn-csv">${icon("download","ic-sm")} CSV 내보내기</button>
@@ -2599,6 +3023,9 @@ function renderList(){
   document.getElementById("btn-import").onclick = ()=>openImport(id);
   c.querySelectorAll("[data-daou]").forEach(b=>{
     b.onclick = ()=>daouAction(id, b.dataset.daou, sel);
+  });
+  c.querySelectorAll("[data-act]").forEach(b=>{
+    b.onclick = ()=>extraAction(b.dataset.act);
   });
 
   /* 선택 항목 일괄 작업 */
@@ -3885,6 +4312,163 @@ function renderClosing(){
    ============================================================ */
 function collCount(id){ return rows(id).length; }
 function areaCount(area){ return area.items.reduce((n,id)=>n+collCount(id),0); }
+
+/* ============================================================
+   재무 대시보드 — 돈이 어디서 들어와 어디로 나가는지 한 장
+   ============================================================ */
+function viewFinance(){
+  const ym = todayStr.slice(0,7);
+  const b  = bankStats();
+  const f  = fixedCostStats();
+  const cash = rows("cash").reduce((s,r)=>s+(Number(r.balance)||0),0);
+  const unpaid = rows("revenue").filter(r=>r.status!=="입금완료");
+  const unpaidSum = unpaid.reduce((s,r)=>s+(Number(r.amount)||0)+(Number(r.vat)||0),0);
+  const purchases = rows("invoice").filter(r=>r.kind==="매입");
+  const unmatched = purchases.filter(r=>!r.paidDate);
+
+  /* 월별 입금/출금 (내부이체 제외) */
+  const byMonth = {};
+  b.real.forEach(r=>{
+    const m = (r.date || txDate(r.at)).slice(0,7);
+    if(!m) return;
+    byMonth[m] = byMonth[m] || {in:0, out:0};
+    byMonth[m][r.kind === "입금" ? "in" : "out"] += Math.abs(Number(r.amount)||0);
+  });
+  const months = Object.keys(byMonth).sort().slice(-6);
+  const peak = months.reduce((n,m)=>Math.max(n, byMonth[m].in, byMonth[m].out), 0) || 1;
+
+  const outCats = Object.entries(b.byCat).sort((a,b2)=>b2[1]-a[1] || 0).sort((x,y)=>y[1]-x[1]);
+  const catMax = outCats.length ? outCats[0][1] : 1;
+  const acct = Object.entries(b.byAcct);
+
+  return `
+  <div class="page-head">
+    <div>
+      <div class="eyebrow">재무 Finance</div>
+      <h1 class="page-title">재무 대시보드</h1>
+      <div class="page-desc">입출금·고정비·미수금을 한 장에서 봅니다. 회사 계좌끼리 옮긴 돈은 빼고 계산합니다.</div>
+    </div>
+    <div class="page-head-actions">
+      <a class="btn btn-sm" href="#/banktx">${icon("chev","ic-sm")} 입출금 내역</a>
+      <a class="btn btn-sm" href="#/fixedcost">${icon("chev","ic-sm")} 정기지출</a>
+      <a class="btn btn-primary btn-sm" href="#/brief">${icon("file","ic-sm")} 경영 브리핑</a>
+    </div>
+  </div>
+
+  <div class="stat-grid compact">
+    <div class="stat accent"><div class="stat-label">보유 자금</div>
+      <div class="stat-value">${wonShort(cash)}<span class="unit">원</span></div></div>
+    <div class="stat"><div class="stat-label">누적 입금</div>
+      <div class="stat-value">${wonShort(b.inflow)}<span class="unit">원</span></div></div>
+    <div class="stat"><div class="stat-label">누적 출금</div>
+      <div class="stat-value">${wonShort(b.outflow)}<span class="unit">원</span></div></div>
+    <div class="stat"><div class="stat-label">월 고정비</div>
+      <div class="stat-value">${wonShort(f.monthly)}<span class="unit">원</span></div></div>
+    <div class="stat"><div class="stat-label">미입금</div>
+      <div class="stat-value">${wonShort(unpaidSum)}<span class="unit">원</span></div></div>
+  </div>
+
+  ${months.length ? `
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-head"><div class="card-title">월별 입금 · 출금
+      <span class="sub">최근 ${months.length}개월 · 내부이체 제외</span></div></div>
+    <div class="card-body">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;font-size:13px">
+        <span style="display:flex;align-items:center;gap:6px">
+          <span style="width:9px;height:9px;border-radius:3px;background:var(--ok)"></span>입금</span>
+        <span style="display:flex;align-items:center;gap:6px">
+          <span style="width:9px;height:9px;border-radius:3px;background:var(--coral)"></span>출금</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        ${months.map(m=>{
+          const v = byMonth[m];
+          return `<div>
+            <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px">
+              <b>${esc(m)}</b>
+              <span class="num" style="color:${v.in-v.out>=0?"var(--ok)":"var(--danger)"}">
+                ${v.in-v.out>=0?"+":"−"}${wonShort(Math.abs(v.in-v.out))}원</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+              <span style="flex:1;height:9px;background:var(--line);border-radius:6px;overflow:hidden">
+                <span style="display:block;height:100%;width:${Math.max(1,Math.round(v.in/peak*100))}%;background:var(--ok);border-radius:6px"></span></span>
+              <span class="num" style="width:74px;text-align:right;font-size:12px">${wonShort(v.in)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="flex:1;height:9px;background:var(--line);border-radius:6px;overflow:hidden">
+                <span style="display:block;height:100%;width:${Math.max(1,Math.round(v.out/peak*100))}%;background:var(--coral);border-radius:6px"></span></span>
+              <span class="num" style="width:74px;text-align:right;font-size:12px">${wonShort(v.out)}</span>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+  </div>` : `<div class="note" style="margin-bottom:16px">${icon("info","ic-sm")}
+    <div><b>입출금 내역이 아직 없습니다.</b> 은행에서 받은 거래내역 CSV를
+    <a href="#/banktx" style="color:var(--coral-deep);font-weight:600">입출금 내역</a> 화면에서 일괄 등록해 주세요.</div></div>`}
+
+  <div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+    ${outCats.length ? `
+    <div class="card">
+      <div class="card-head"><div class="card-title">어디에 나갔나
+        <span class="sub">계정별 출금 · 내부이체 제외</span></div></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:9px">
+        ${outCats.slice(0,9).map(([c,v])=>`
+          <div style="display:grid;grid-template-columns:88px 1fr 84px;align-items:center;gap:10px">
+            <span style="font-size:13px;color:var(--ink-2)">${esc(c)}</span>
+            <span style="height:9px;background:var(--line);border-radius:6px;overflow:hidden">
+              <span style="display:block;height:100%;width:${Math.max(2,Math.round(v/catMax*100))}%;background:var(--coral);border-radius:6px"></span></span>
+            <span class="num" style="text-align:right;font-size:13px;font-weight:600">${wonShort(v)}원</span>
+          </div>`).join("")}
+      </div>
+    </div>` : ""}
+
+    ${acct.length ? `
+    <div class="card">
+      <div class="card-head"><div class="card-title">계좌별 잔액
+        <span class="sub">가장 최근 거래 기준</span></div></div>
+      <div>
+        ${acct.map(([a,r])=>`
+          <div class="list-row">
+            <div class="list-main">
+              <div class="t">${esc(a)}</div>
+              <div class="s">${esc(r.at||"")}</div>
+            </div>
+            <b class="num">${won(r.balance)}원</b>
+          </div>`).join("")}
+      </div>
+    </div>` : ""}
+  </div>
+
+  ${purchases.length ? `
+  <div class="card" style="margin-top:16px">
+    <div class="card-head">
+      <div class="card-title">매입 세금계산서 · 출금 대사
+        <span class="sub">전체 ${purchases.length}건 중 ${purchases.length - unmatched.length}건 확인됨</span></div>
+      <div class="right"><a class="btn btn-sm" href="#/invoice">세금계산서로</a></div>
+    </div>
+    <div class="card-body">
+      ${unmatched.length ? `<div class="note" style="background:var(--warn-bg)">${icon("alert","ic-sm")}
+        <div><b>아직 출금과 짝이 안 맞는 매입 ${unmatched.length}건</b> —
+        ${unmatched.slice(0,5).map(r=>`${esc(r.client||"(거래처 없음)")} ${won(r.total)}원`).join(", ")}${unmatched.length>5?" 외":""}
+        <div style="margin-top:6px">세금계산서 화면의 <b>[출금 내역과 매칭]</b> 을 눌러 맞춰 보세요.</div></div></div>`
+      : `<div class="note">${icon("check","ic-sm")}<div>매입 세금계산서가 모두 출금과 연결되어 있습니다.</div></div>`}
+    </div>
+  </div>` : ""}
+
+  ${f.all.length ? `
+  <div class="card" style="margin-top:16px">
+    <div class="card-head"><div class="card-title">고정비 구성
+      <span class="sub">월 ${wonShort(f.monthly)}원 · 연 ${wonShort(f.yearly)}원</span></div>
+      <div class="right"><a class="btn btn-sm" href="#/fixedcost">정기지출로</a></div></div>
+    <div class="card-body" style="display:flex;gap:14px;flex-wrap:wrap">
+      ${Object.entries(f.byKind).sort((a,b2)=>b2[1]-a[1]).map(([k,v])=>`
+        <div style="flex:1;min-width:140px;padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius-sm)">
+          <div style="font-size:12.5px;color:var(--muted)">${esc(k)}</div>
+          <div class="num" style="font-size:19px;font-weight:800;margin-top:4px">${wonShort(v)}원</div>
+        </div>`).join("")}
+    </div>
+  </div>` : ""}`;
+}
 
 function viewData(){
   const total = Object.keys(COLLECTIONS).reduce((n,id)=>n+collCount(id),0);
@@ -5180,6 +5764,18 @@ function daouActionsFor(id){
   const list = (DAOU_ACTIONS[id] || []).slice();
   if(NOTI_MAP[id]) list.push({act:"noti", ic:"upload", label:"알림 발송"});
   return list;
+}
+
+/* 다우오피스와 무관한 화면별 도구 버튼 */
+const EXTRA_ACTIONS = {
+  banktx: [{act:"txauto",   ic:"refresh",  label:"분류 자동 채우기"},
+           {act:"txfixed",  ic:"search",   label:"정기지출 찾기"}],
+  invoice:[{act:"txmatch",  ic:"check",    label:"출금 내역과 매칭"}]
+};
+function extraActionBtn(id){
+  return (EXTRA_ACTIONS[id]||[]).map(a=>
+    `<button class="btn btn-sm" data-act="${esc(a.act)}">${icon(a.ic,"ic-sm")} ${esc(a.label)}</button>`
+  ).join("");
 }
 
 function daouActionBtn(id){
