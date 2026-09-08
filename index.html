@@ -719,13 +719,14 @@ const DEMO_AUTOSEED = true;
 
 const DEPTS = ["경영지원","마케팅","영업","연구개발","생산","디자인","IT"];
 /* 계정과목 — 비용 관리와 같은 기준으로 맞춘다 */
+/* 계정과목 — 지출결의·법인카드·비용관리·정기지출·입출금이 모두 이 목록을 씁니다.
+   화면마다 다르면 같은 지출이 다르게 잡혀 집계가 어긋납니다. */
 const ACCOUNTS = ["인건비","임차료","지급수수료","광고선전비","소모품비","통신비","법인폰",
-                  "복리후생비","여비교통비","접대비","교육훈련비","감가상각비","기타"];
+                  "복리후생비","여비교통비","접대비","교육훈련비","감가상각비","보험료","기타"];
 
 /* 입출금 분류 — 계정과목에 은행 거래에서만 나오는 항목을 더한 목록 */
-const TX_ACCOUNTS = ["매출입금","인건비","4대보험","세금","법인카드","임차료","지급수수료",
-                     "통신비","법인폰","소모품비","광고선전비","여비교통비","복리후생비","접대비",
-                     "금융","내부이체","기타"];
+/* 입출금에서만 쓰는 항목 + 공통 계정과목 */
+const TX_ACCOUNTS = ["매출입금","법인카드","4대보험","세금","금융","내부이체"].concat(ACCOUNTS);
 
 /* 결제 방식 — 자동이체인지 카드인지 손으로 보낸 돈인지 */
 const PAY_METHODS = ["자동이체","카드","급여이체","계좌이체","기타"];
@@ -755,6 +756,7 @@ const TX_RULES = [
   [/세무법인|회계법인|법무|변호사|법무사|합동법무/,   "지급수수료"],
   [/수수료|인증/,                                "지급수수료"],
   [/임차|관리비|월세|보증금|캐슬|오피스텔/,         "임차료"],
+  [/화재보험|배상책임|단체상해|임원배상|보험료|손해보험|화재해상/,        "보험료"],
   [/오피스넷|인터넷|전용회선|호스팅|도메인|가비아|서버|다우기술|카페24\(주\)/, "통신비"],
   [/법인폰|휴대폰|모바일|알뜰폰|SKT|SK텔레콤|KT\b|LG유플러스|엘지유플러스|유플러스|LGU/, "법인폰"],
   [/SK브로드|텔레콤|통신/,                              "통신비"],
@@ -989,7 +991,7 @@ const COLLECTIONS = {
       {k:"requester",l:"기안자",t:"person",req:1},
       {k:"dept",l:"부서",t:"select",o:DEPTS},
       {k:"item",l:"지출내용",t:"text",req:1},
-      {k:"category",l:"계정과목",t:"select",o:["복리후생비","여비교통비","접대비","소모품비","지급수수료","광고선전비","교육훈련비","통신비"]},
+      {k:"category",l:"계정과목",t:"select",o:ACCOUNTS},
       {k:"amount",l:"금액",t:"money",req:1},
       {k:"approver",l:"결재자",t:"text"},
       {k:"status",l:"결재상태",t:"select",o:["결재대기","승인","반려","완료"],badge:1,req:1}
@@ -1003,7 +1005,7 @@ const COLLECTIONS = {
       {k:"card",l:"카드",t:"select",o:["신한 *1234","국민 *5678","하나 *9012","현대 *3456"],req:1},
       {k:"holder",l:"사용자",t:"person",req:1},
       {k:"merchant",l:"가맹점",t:"text",req:1},
-      {k:"category",l:"계정과목",t:"select",o:["복리후생비","여비교통비","접대비","소모품비","광고선전비","통신비"]},
+      {k:"category",l:"계정과목",t:"select",o:ACCOUNTS},
       {k:"amount",l:"금액",t:"money",req:1},
       {k:"receipt",l:"증빙",t:"select",o:["완료","대기","반려"],badge:1},
       {k:"source",l:"출처",t:"select",o:["수기","엑셀","세무사API"],badge:1,sys:1},
@@ -1042,7 +1044,7 @@ const COLLECTIONS = {
     primary:"item", stat:"dept",
     fields:[
       {k:"month",l:"귀속월",t:"month",req:1,w:90},
-      {k:"category",l:"계정과목",t:"select",o:["인건비","임차료","지급수수료","광고선전비","소모품비","통신비","복리후생비","여비교통비","감가상각비"],req:1},
+      {k:"category",l:"계정과목",t:"select",o:ACCOUNTS,req:1},
       {k:"item",l:"항목",t:"text",req:1},
       {k:"dept",l:"부서",t:"select",o:DEPTS},
       {k:"amount",l:"금액",t:"money",req:1},
@@ -1393,13 +1395,12 @@ const MENU = [
   ]},
   {type:"group", id:"fin", icon:"wallet", label:"재무 Finance", items:[
     {id:"findash",label:"재무 대시보드"},
+    {id:"banktx",label:"입출금 내역"},{id:"cash",label:"자금현황"},
+    {id:"revenue",label:"매출/입금"},{id:"invoice",label:"세금계산서"},
     {id:"expense",label:"지출결의"},{id:"corpcard",label:"법인카드"},
-    {id:"tax",label:"세금/부가세"},{id:"revenue",label:"매출/입금"},
-    {id:"cost",label:"비용 관리"},{id:"pnl",label:"월별 손익"},
-    {id:"closing",label:"월 마감"},
-    {id:"banktx",label:"입출금 내역"},
-    {id:"cash",label:"자금현황"},{id:"invoice",label:"세금계산서"},
-    {id:"fixedcost",label:"정기지출·고정비"},
+    {id:"fixedcost",label:"정기지출·고정비"},{id:"cost",label:"비용 관리"},
+    {id:"tax",label:"세금/부가세"},
+    {id:"pnl",label:"월별 손익"},{id:"closing",label:"월 마감"},
     {id:"vendor",label:"거래처 관리"}
   ]},
   {type:"group", id:"ga", icon:"box", label:"총무 General Affairs", items:[
