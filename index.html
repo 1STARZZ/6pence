@@ -2791,31 +2791,102 @@ function openWorksModal(){
         </div>`).join("")}</div>`;
       box.querySelectorAll("[data-wk]").forEach(btn=>btn.onclick=()=>{
         const id = btn.dataset.wk;
+        const appName = btn.closest(".list-row").querySelector(".t").textContent.trim();
         btn.disabled = true; btn.textContent = "불러오는 중…";
         worksDocuments(id, lid).then(docs=>{
-          if(!docs.length){ alert("이 앱에는 문서가 없습니다."); btn.disabled=false; btn.textContent="가져오기"; return; }
-          const tbl = worksToTable(docs);
-          closeModal();
-          /* 일괄 등록 화면에 그대로 넣어 준다 — 어느 화면에 넣을지는 사람이 고른다 */
-          const target = prompt(
-            `Works 문서 ${docs.length}건을 가져왔습니다.\n어느 화면에 넣을까요?\n\n` +
-            `1 입출금 내역   2 세금계산서   3 정기지출·고정비\n4 지출결의   5 법인카드   6 비용 관리`, "2");
-          const map = {1:"banktx",2:"invoice",3:"fixedcost",4:"expense",5:"corpcard",6:"cost"};
-          const to = map[Number(target)];
-          if(!to) return;
-          location.hash = "#/" + to;
-          setTimeout(()=>{
-            openImport(to);
-            setTimeout(()=>{
-              const ta = document.getElementById("imp-text");
-              if(!ta) return;
-              ta.value = tbl.text;
-              ta.dispatchEvent(new Event("input"));
-            }, 80);
-          }, 120);
+          btn.disabled = false; btn.textContent = "가져오기";
+          if(!docs.length){ alert("이 앱에는 문서가 없습니다."); return; }
+          showWorksMapping(appName, worksToTable(docs), docs.length);
         }).catch(e=>{ btn.disabled=false; btn.textContent="가져오기"; err(e); });
       });
     }).catch(err);
+  };
+}
+
+/* Works 앱 이름으로 어느 화면에 넣을지 미리 짐작한다 */
+const WORKS_TARGETS = [
+  {id:"invoice",   label:"세금계산서",      hint:/계산서|매입|매출|인보이스/},
+  {id:"corpcard",  label:"법인카드",        hint:/법인카드|카드|corporate/i},
+  {id:"banktx",    label:"입출금 내역",     hint:/입출금|계좌|거래내역|통장/},
+  {id:"fixedcost", label:"정기지출·고정비", hint:/정기|고정비|구독/},
+  {id:"expense",   label:"지출결의",        hint:/지출결의|결의|기안/},
+  {id:"cost",      label:"비용 관리",       hint:/비용/},
+  {id:"revenue",   label:"매출/입금",       hint:/매출|입금|수금/},
+  {id:"vendor",    label:"거래처 관리",     hint:/거래처|업체|협력/}
+];
+function guessTarget(name){
+  const t = WORKS_TARGETS.find(x=>x.hint.test(String(name||"")));
+  return t ? t.id : "invoice";
+}
+
+/* 가져온 표를 어느 화면에 어떻게 넣을지 보여 주고 등록한다 */
+function showWorksMapping(appName, tbl, count){
+  const guess = guessTarget(appName);
+  modalEl && closeModal();
+  modalEl = document.createElement("div");
+  modalEl.className = "overlay";
+  modalEl.innerHTML = `<div class="modal wide">
+    <div class="modal-head"><div><h3>Works → 6pence</h3>
+      <div class="sub">${esc(appName)} · ${count}건을 가져왔습니다. 넣을 화면을 고르세요.</div></div></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-row"><label>넣을 화면</label>
+          <select id="wm-target">
+            ${WORKS_TARGETS.map(t=>`<option value="${t.id}" ${t.id===guess?"selected":""}>${esc(t.label)}</option>`).join("")}
+          </select></div>
+      </div>
+      <div id="wm-map" style="margin-top:14px"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="wm-note" style="margin-right:auto"></span>
+      <button class="btn" id="wm-cancel">취소</button>
+      <button class="btn btn-primary" id="wm-go">일괄 등록 화면으로</button>
+    </div></div>`;
+  document.body.appendChild(modalEl);
+  document.body.style.overflow = "hidden";
+  modalEl.onclick = e => { if(e.target===modalEl) closeModal(); };
+  modalEl.querySelector("#wm-cancel").onclick = closeModal;
+
+  const paint = ()=>{
+    const to  = modalEl.querySelector("#wm-target").value;
+    const col = COLLECTIONS[to];
+    const map = mapHeader(col, tbl.head);                 /* Works 컬럼 → 6pence 항목 */
+    const hit = tbl.head.map((h,i)=>({h, f:map[i]}));
+    const okN = hit.filter(x=>x.f).length;
+    const res = analyze(to, tbl.text);
+    const good = res.items.filter(i=>i.ok).length;
+    modalEl.querySelector("#wm-map").innerHTML = `
+      <div style="border:1px solid var(--line);border-radius:var(--radius-sm);overflow:hidden">
+        ${hit.map(x=>`
+          <div class="list-row" style="padding:8px 14px">
+            <div class="list-main">
+              <div class="t" style="font-size:13px">${esc(x.h)}</div>
+            </div>
+            ${x.f ? `<span class="badge ok">→ ${esc(x.f.l)}</span>`
+                  : `<span class="badge">사용 안 함</span>`}
+          </div>`).join("")}
+      </div>
+      ${res.error ? `<div class="note" style="margin-top:12px;background:var(--danger-bg)">${icon("alert","ic-sm")}
+        <div>${esc(res.error)}</div></div>` : ""}`;
+    modalEl.querySelector("#wm-note").textContent =
+      `컬럼 ${okN}/${tbl.head.length}개 연결 · 등록 가능 ${good}/${res.items.length}건`;
+  };
+  modalEl.querySelector("#wm-target").onchange = paint;
+  paint();
+
+  modalEl.querySelector("#wm-go").onclick = ()=>{
+    const to = modalEl.querySelector("#wm-target").value;
+    closeModal();
+    location.hash = "#/" + to;
+    setTimeout(()=>{
+      openImport(to);
+      setTimeout(()=>{
+        const ta = document.getElementById("imp-text");
+        if(!ta) return;
+        ta.value = tbl.text;
+        ta.dispatchEvent(new Event("input"));
+      }, 80);
+    }, 120);
   };
 }
 
@@ -4452,6 +4523,77 @@ function reconcile(){
   };
 }
 
+/* ------------------------------------------------------------
+   법인카드 대사 — 카드 사용내역 합계 vs 카드 결제대금 출금
+   카드는 건별로 빠지지 않고 결제일에 한꺼번에 빠지므로 월 단위로 맞춘다.
+   ------------------------------------------------------------ */
+function cardRecon(){
+  const use = rows("corpcard");
+  const pay = rows("banktx").filter(r=>r.kind === "출금" && r.category === "법인카드");
+
+  const byMonth = {};
+  const put = (m, key, amt) => {
+    if(!m) return;
+    byMonth[m] = byMonth[m] || {use:0, pay:0, useN:0, payN:0};
+    byMonth[m][key] += amt;
+    byMonth[m][key + "N"]++;
+  };
+  use.forEach(r=>put(String(r.date||"").slice(0,7), "use", Number(r.amount)||0));
+  pay.forEach(r=>put(String(r.date || txDate(r.at)).slice(0,7), "pay", Math.abs(Number(r.amount)||0)));
+
+  const months = Object.keys(byMonth).sort();
+  const noReceipt = use.filter(r=>r.receipt && r.receipt !== "완료" && r.receipt !== "첨부");
+  const noCategory = use.filter(r=>!r.category);
+  return {
+    months, byMonth, use, pay, noReceipt, noCategory,
+    useSum: use.reduce((n,r)=>n+(Number(r.amount)||0), 0),
+    paySum: pay.reduce((n,r)=>n+Math.abs(Number(r.amount)||0), 0)
+  };
+}
+
+function cardReconBlock(){
+  const C = cardRecon();
+  if(!C.use.length && !C.pay.length) return "";
+  const diff = C.useSum - C.paySum;
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-head">
+      <div class="card-title">법인카드 대사
+        <span class="sub">사용 ${C.use.length}건 ${wonShort(C.useSum)}원 · 결제 ${C.pay.length}건 ${wonShort(C.paySum)}원</span></div>
+      <div class="right"><a class="btn btn-sm" href="#/corpcard">법인카드로</a></div>
+    </div>
+    <div class="card-body">
+      ${!C.pay.length ? `<div class="note" style="background:var(--warn-bg)">${icon("alert","ic-sm")}
+        <div>입출금 내역에서 <b>법인카드</b>로 분류된 출금이 없습니다.
+        입출금 화면에서 <b>[분류 자동 채우기]</b> 를 먼저 눌러 주세요.</div></div>`
+      : `
+      <div style="display:flex;flex-direction:column;gap:11px">
+        ${C.months.map(m=>{
+          const v = C.byMonth[m];
+          const d = v.use - v.pay;
+          const both = v.useN && v.payN;
+          return `<div style="display:grid;grid-template-columns:82px 1fr 1fr 108px;align-items:center;gap:12px;font-size:13px">
+            <b>${esc(m)}</b>
+            <span>사용 <b class="num">${won(v.use)}</b><span class="muted"> · ${v.useN}건</span></span>
+            <span>결제 <b class="num">${won(v.pay)}</b><span class="muted"> · ${v.payN}건</span></span>
+            <span class="num" style="text-align:right;color:${!both?"var(--muted)":Math.abs(d)<1000?"var(--ok)":"var(--warn)"}">
+              ${!both ? "한쪽만 있음" : Math.abs(d)<1000 ? "맞음" : (d>0?"+":"−")+won(Math.abs(d))}</span>
+          </div>`;
+        }).join("")}
+      </div>
+      <div class="note" style="margin-top:14px">${icon("info","ic-sm")}
+        <div>카드는 쓴 달과 빠져나간 달이 다릅니다. 결제일 기준이라 한 달씩 밀려 보이는 것이 정상이며,
+        <b>여러 달을 합쳐서</b> 총액이 맞는지 보시면 됩니다.
+        현재 누적 차이 <b>${wonShort(Math.abs(diff))}원</b>${diff>0?" (아직 안 빠진 금액)":diff<0?" (사용내역 미등록 추정)":""}.</div></div>`}
+      ${C.noReceipt.length || C.noCategory.length ? `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px">
+        ${C.noReceipt.length?`<span class="badge warn">증빙 미처리 ${C.noReceipt.length}건</span>`:""}
+        ${C.noCategory.length?`<span class="badge warn">계정과목 미지정 ${C.noCategory.length}건</span>`:""}
+      </div>` : ""}
+    </div>
+  </div>`;
+}
+
 function viewReconcile(){
   const R = reconcile();
   const money = list => list.reduce((n,l)=>n+(l.amount||0), 0);
@@ -4509,6 +4651,8 @@ function viewReconcile(){
   ${!R.drafts.length ? `<div class="note">${icon("info","ic-sm")}
     <div><b>승인된 지출결의가 없습니다.</b> 지출결의 화면에서 결재상태가 <b>승인</b>인 건만 대사 대상입니다.
     다우오피스 전자결재에는 목록을 내려주는 API가 없어서, 6pence 지출결의를 기안 대장으로 씁니다.</div></div>` : ""}
+
+  ${cardReconBlock()}
 
   ${block("증빙이 없는 지출", "돈은 나갔는데 매입 세금계산서를 못 찾았습니다 — 매입세액공제를 놓칠 수 있습니다", R.noInv, "증빙 없음")}
   ${block("지급이 확인 안 된 건", "기안·증빙은 있는데 출금 기록에서 못 찾았습니다 — 아직 안 나갔거나 다른 계좌일 수 있습니다", R.noTx, "지급 확인")}
@@ -4687,6 +4831,8 @@ function viewFinance(){
       : `<div class="note">${icon("check","ic-sm")}<div>매입 세금계산서가 모두 출금과 연결되어 있습니다.</div></div>`}
     </div>
   </div>` : ""}
+
+  ${cardReconBlock()}
 
   ${f.all.length ? `
   <div class="card" style="margin-top:16px">
