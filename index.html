@@ -992,7 +992,15 @@ const COLLECTIONS = {
       {k:"dept",l:"부서",t:"select",o:DEPTS},
       {k:"item",l:"지출내용",t:"text",req:1},
       {k:"category",l:"계정과목",t:"select",o:ACCOUNTS},
-      {k:"amount",l:"금액",t:"money",req:1},
+      {k:"amount",l:"금액",t:"money",req:1,hint:"VAT 포함"},
+      {k:"vendor",l:"사업자명",t:"text"},
+      {k:"bizNo",l:"사업자번호",t:"text",hide:1},
+      {k:"bank",l:"은행명",t:"text",hide:1},
+      {k:"account",l:"계좌번호",t:"text",hide:1},
+      {k:"holder",l:"예금주",t:"text",hide:1},
+      {k:"payDue",l:"입금예정일",t:"date"},
+      {k:"execDate",l:"시행일자",t:"date",hide:1},
+      {k:"coopDept",l:"협조부서",t:"text",hide:1},
       {k:"approver",l:"결재자",t:"text"},
       {k:"status",l:"결재상태",t:"select",o:["결재대기","승인","반려","완료"],badge:1,req:1},
       {k:"paidDate",l:"출금일",t:"date",hint:"입출금 내역과 대사하면 채워집니다"},
@@ -4189,26 +4197,51 @@ function bindDashboard(){
 }
 
 /* ---------------- 전자결재 상신 ----------------
-   6pence 지출결의로 남기고, 동시에 다우오피스 기안 화면을 엽니다. */
+   6pence 지출결의로 남기고, 동시에 다우오피스 기안 화면을 엽니다.
+   입력 항목과 본문은 다우오피스 「지출결의서」 양식을 그대로 따릅니다.
+   (기안자 · 소속 · 기안일 · 문서번호 · 결재선은 다우오피스가 채웁니다) */
+const EXPENSE_ATTACH = ["사업자등록증", "통장 사본", "세금계산서", "원 기안 참조"];
+
 function openApprovalDraft(){
   const col = COLLECTIONS.expense;
   const cat = col.fields.find(f=>f.k==="category").o;
   const me = rows("employees");
   const defs = defaultsFor("expense", 0);
+  /* 이전에 올린 거래처는 지급 정보를 다시 치지 않도록 */
+  const vendors = {};
+  rows("expense").forEach(r=>{ if(r.vendor && !vendors[r.vendor]) vendors[r.vendor] = r; });
+
+  const row = (name, label, attrs, cls) => `<div class="form-row${cls?" "+cls:""}">
+        <label>${label}</label><input name="${name}" autocomplete="off" ${attrs||""}></div>`;
+  const REQ = ' <span class="req">*</span>';
 
   modalEl = document.createElement("div");
   modalEl.className = "overlay";
   modalEl.innerHTML = `<div class="modal">
     <div class="modal-head"><div>
-      <h3>전자결재 상신</h3>
+      <h3>전자결재 상신 · 지출결의서</h3>
       <div class="sub">작성하면 6pence 지출결의에 기록되고, 다우오피스 기안 화면이 열립니다</div></div></div>
     <div class="modal-body"><form id="ap-form"><div class="form-grid">
-      <div class="form-row full">
-        <label>지출내용 <span class="req">*</span></label>
-        <input name="item" placeholder="예: 8월 캠페인 콘텐츠 제작비" autocomplete="off">
+      <div class="form-row">
+        <label>기안자${REQ}</label>
+        <input name="requester" list="dl-emp" autocomplete="off" placeholder="이름">
       </div>
       <div class="form-row">
-        <label>금액 <span class="req">*</span><span class="form-hint" style="float:right">원</span></label>
+        <label>기안일</label>
+        <input name="date" type="date" value="${esc(defs.date||todayStr)}">
+      </div>
+      ${row("execDate", "시행일자", `type="date" value="${esc(todayStr)}"`)}
+      ${row("coopDept", "협조부서", 'placeholder="예: 재무팀"')}
+      ${row("item", "제목"+REQ, 'placeholder="예: 8월 캠페인 콘텐츠 제작비"', "full")}
+
+      ${row("vendor", "사업자명", 'list="dl-vendor" placeholder="거래처 상호"')}
+      ${row("bizNo", "사업자번호", 'placeholder="000-00-00000"')}
+      ${row("bank", "은행명", 'placeholder="예: 국민은행"')}
+      ${row("account", "계좌번호", 'placeholder="숫자와 - 만"')}
+      ${row("holder", "예금주")}
+      ${row("payDue", "지출일(입금예정일)", 'type="date"')}
+      <div class="form-row">
+        <label>지출액(VAT 포함)${REQ}<span class="form-hint" style="float:right">원</span></label>
         <input name="amount" type="number" placeholder="0">
         <div class="money-echo" data-echo="amount"></div>
       </div>
@@ -4216,22 +4249,16 @@ function openApprovalDraft(){
         <label>계정과목</label>
         <select name="category"><option value="">선택</option>${cat.map(o=>`<option>${esc(o)}</option>`).join("")}</select>
       </div>
-      <div class="form-row">
-        <label>기안자 <span class="req">*</span></label>
-        <input name="requester" list="dl-emp" autocomplete="off" placeholder="이름">
-      </div>
-      <div class="form-row">
-        <label>기안일</label>
-        <input name="date" type="date" value="${esc(defs.date||todayStr)}">
-      </div>
       <div class="form-row full">
-        <label>비고</label>
-        <textarea name="note" placeholder="결재 본문에 함께 들어갑니다"></textarea>
+        <label>내용</label>
+        <textarea name="note" placeholder="지출 사유 · 산출 근거 등 결재 본문에 들어갑니다"></textarea>
       </div>
     </div></form>
     <datalist id="dl-emp">${me.map(e=>`<option value="${esc(e.name)}">`).join("")}</datalist>
+    <datalist id="dl-vendor">${Object.keys(vendors).map(n=>`<option value="${esc(n)}">`).join("")}</datalist>
     <div class="note" style="margin-top:14px">${icon("info","ic-sm")}
-      <div>다우오피스 기안 화면이 <b>새 창</b>으로 열립니다. 결재선을 지정하고 상신하시면 됩니다.</div></div>
+      <div><b>필수 첨부</b> — ${EXPENSE_ATTACH.map((t,i)=>`${i+1}. ${esc(t)}`).join(" · ")}<br>
+      다우오피스 기안 화면이 <b>새 창</b>으로 열립니다. 결재선을 지정하고 첨부파일을 올린 뒤 상신하시면 됩니다.</div></div>
     </div>
     <div class="modal-foot">
       <button class="btn" id="ap-cancel">취소</button>
@@ -4247,11 +4274,19 @@ function openApprovalDraft(){
     const e = form.querySelector('[data-echo="amount"]');
     if(e) e.textContent = koAmount(form.amount.value);
   });
+  /* 아는 거래처면 지급 정보를 채운다 (이미 친 칸은 건드리지 않음) */
+  form.vendor.addEventListener("change", ()=>{
+    const p = vendors[form.vendor.value.trim()];
+    if(!p) return;
+    ["bizNo","bank","account","holder","category"].forEach(k=>{
+      if(p[k] && !form[k].value) form[k].value = p[k];
+    });
+  });
 
   modalEl.querySelector("#ap-go").onclick = ()=>{
     const v = k => (form[k] ? String(form[k].value).trim() : "");
     if(!v("item") || !v("amount") || !v("requester")){
-      alert("지출내용 · 금액 · 기안자는 필수입니다."); return;
+      alert("제목 · 지출액 · 기안자는 필수입니다."); return;
     }
     const emp = rows("employees").find(e=>e.name===v("requester")) || {};
     const rec = Object.assign({_id:uid()}, defs, {
@@ -4261,24 +4296,52 @@ function openApprovalDraft(){
       item: v("item"),
       category: v("category"),
       amount: Number(v("amount")) || 0,
+      vendor: v("vendor"), bizNo: v("bizNo"), bank: v("bank"),
+      account: v("account"), holder: v("holder"),
+      payDue: v("payDue"), execDate: v("execDate"), coopDept: v("coopDept"),
       status: "결재대기",
     });
     DB.expense.unshift(rec);
     commit("expense");
 
-    const content = `<table border="1" cellpadding="6" style="border-collapse:collapse">
-      <tr><th>문서번호</th><td>${esc(rec.docNo||"")}</td><th>기안일</th><td>${esc(rec.date)}</td></tr>
-      <tr><th>기안자</th><td>${esc(rec.requester)}</td><th>부서</th><td>${esc(rec.dept)}</td></tr>
-      <tr><th>계정과목</th><td>${esc(rec.category)}</td><th>금액</th><td>${won(rec.amount)}원</td></tr>
-      <tr><th>지출내용</th><td colspan="3">${esc(rec.item)}</td></tr>
-      ${v("note") ? `<tr><th>비고</th><td colspan="3">${esc(v("note"))}</td></tr>` : ""}
-    </table>`;
     approvalSubmitDirect({title:`[지출결의] ${rec.item} (${won(rec.amount)}원)`,
-      content, draftEmpNo:empNoOf(rec.requester), partnerDocId:rec.docNo || rec._id});
+      content: expenseDraftHtml(rec, v("note")),
+      draftEmpNo:empNoOf(rec.requester), partnerDocId:rec.docNo || rec._id});
     closeModal(); renderNav(); route();
     toast("지출결의로 기록하고 다우오피스 기안 화면을 열었습니다.");
   };
-  form.querySelector('[name="item"]').focus();
+  form.querySelector('[name="requester"]').focus();
+}
+
+/* 다우오피스 지출결의서 양식과 같은 순서 · 같은 모양의 본문 */
+function expenseDraftHtml(rec, note){
+  const TH = 'style="background:#ddd;padding:5px;border:1px solid #000;text-align:center;font-weight:bold;font-size:14px"';
+  const TD = 'style="background:#fff;padding:5px;border:1px solid #000;text-align:left;font-size:14px"';
+  const TB = 'style="width:800px;border-collapse:collapse;margin-top:10px;font-family:malgun gothic,dotum,arial,tahoma"';
+  const line = (l, v) => `<tr><td ${TH} width="200">${l}</td><td ${TD}>${esc(v||"")}</td></tr>`;
+  const body = esc(note || "").replace(/\n/g, "<br>");
+  return `<table ${TB}>
+      <tr><td ${TH} width="120">시행일자</td><td ${TD} width="230">${esc(rec.execDate||"")}</td>
+          <td ${TH} width="120">협조부서</td><td ${TD} width="330">${esc(rec.coopDept||"")}</td></tr>
+      <tr><td ${TH}>제목</td><td ${TD} colspan="3">${esc(rec.item)}</td></tr>
+    </table>
+    <table ${TB}>
+      ${line("사업자명", rec.vendor)}
+      ${line("사업자번호", rec.bizNo)}
+      ${line("은행명", rec.bank)}
+      ${line("계좌번호", rec.account)}
+      ${line("예금주", rec.holder)}
+      ${line("지출일(입금예정일)", rec.payDue)}
+      ${line("지출액(VAT 포함)", won(rec.amount) + "원")}
+      ${rec.category ? line("계정과목", rec.category) : ""}
+    </table>
+    <table ${TB}>
+      <tr><td ${TH}>내 용</td></tr>
+      <tr><td ${TD} height="300" valign="top">${body}</td></tr>
+      <tr><td style="background:#fff;padding:8px;border:1px solid #000;font-size:13px">
+        <strong>■ 필수 첨부내역</strong><br>
+        ${EXPENSE_ATTACH.map((t,i)=>`&nbsp;&nbsp;&nbsp;${i+1}. ${esc(t)}`).join("<br>")}</td></tr>
+    </table>`;
 }
 
 
@@ -4500,12 +4563,12 @@ function reconcile(){
   const lines = drafts.map(d=>{
     const amt = Number(d.amount)||0;
     const inv = invs.filter(i=>!usedInv.has(i._id))
-      .map(i=>({i, sc:looseMatch(d.requester||d.item, i.client, amt, invTotal(i), d.date, i.issueDate)}))
+      .map(i=>({i, sc:looseMatch(d.vendor||d.requester||d.item, i.client, amt, invTotal(i), d.date, i.issueDate)}))
       .filter(x=>x.sc > 0).sort((a,b)=>b.sc-a.sc)[0];
     if(inv) usedInv.add(inv.i._id);
     const tx = txs.filter(t=>!usedTx.has(t._id))
-      .map(t=>({t, sc:looseMatch(inv ? inv.i.client : d.item, t.desc, amt, Math.abs(Number(t.amount)||0),
-                                 d.date, t.date || txDate(t.at))}))
+      .map(t=>({t, sc:looseMatch(inv ? inv.i.client : (d.holder||d.vendor||d.item), t.desc, amt, Math.abs(Number(t.amount)||0),
+                                 d.payDue || d.date, t.date || txDate(t.at))}))
       .filter(x=>x.sc > 0).sort((a,b)=>b.sc-a.sc)[0];
     if(tx) usedTx.add(tx.t._id);
     return {draft:d, inv:inv&&inv.i, tx:tx&&tx.t, amount:amt};
